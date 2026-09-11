@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../state/profile_controller.dart';
 import '../widgets/profile_form.dart';
@@ -20,7 +21,7 @@ class EditProfileScreen extends StatelessWidget {
           submitLabel: 'Save',
           onSubmit: (profile) {
             controller.save(profile);
-            Navigator.of(context).pop();
+            context.pop();
           },
         ),
       ),

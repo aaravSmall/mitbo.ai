@@ -1,5 +1,6 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 enum _CameraStatus {
@@ -52,33 +53,49 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   }
 
   Future<void> _bootstrap() async {
-    final status = await Permission.camera.status;
-    if (status.isGranted) {
-      await _startCamera();
-      return;
+    try {
+      final status = await Permission.camera.status;
+      if (status.isGranted) {
+        await _startCamera();
+        return;
+      }
+      if (status.isPermanentlyDenied) {
+        setState(() => _status = _CameraStatus.permanentlyDenied);
+        return;
+      }
+      if (status.isRestricted) {
+        setState(() => _status = _CameraStatus.restricted);
+        return;
+      }
+      setState(() => _status = _CameraStatus.needsRationale);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _status = _CameraStatus.error;
+        _errorMessage = '$e';
+      });
     }
-    if (status.isPermanentlyDenied) {
-      setState(() => _status = _CameraStatus.permanentlyDenied);
-      return;
-    }
-    if (status.isRestricted) {
-      setState(() => _status = _CameraStatus.restricted);
-      return;
-    }
-    setState(() => _status = _CameraStatus.needsRationale);
   }
 
   Future<void> _requestPermission() async {
     setState(() => _status = _CameraStatus.requesting);
-    final result = await Permission.camera.request();
-    if (result.isGranted) {
-      await _startCamera();
-    } else if (result.isPermanentlyDenied) {
-      setState(() => _status = _CameraStatus.permanentlyDenied);
-    } else if (result.isRestricted) {
-      setState(() => _status = _CameraStatus.restricted);
-    } else {
-      setState(() => _status = _CameraStatus.needsRationale);
+    try {
+      final result = await Permission.camera.request();
+      if (result.isGranted) {
+        await _startCamera();
+      } else if (result.isPermanentlyDenied) {
+        setState(() => _status = _CameraStatus.permanentlyDenied);
+      } else if (result.isRestricted) {
+        setState(() => _status = _CameraStatus.restricted);
+      } else {
+        setState(() => _status = _CameraStatus.needsRationale);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _status = _CameraStatus.error;
+        _errorMessage = '$e';
+      });
     }
   }
 
@@ -122,7 +139,16 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Camera')),
+      appBar: AppBar(
+        title: const Text('Camera'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Edit profile',
+            onPressed: () => context.push('/edit-profile'),
+          ),
+        ],
+      ),
       body: SafeArea(child: _buildBody()),
     );
   }
