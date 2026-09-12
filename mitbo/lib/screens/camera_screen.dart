@@ -24,7 +24,8 @@ class CameraScreen extends StatefulWidget {
   State<CameraScreen> createState() => _CameraScreenState();
 }
 
-class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver {
+class _CameraScreenState extends State<CameraScreen>
+    with WidgetsBindingObserver {
   _CameraStatus _status = _CameraStatus.checking;
   CameraController? _controller;
   String? _errorMessage;
@@ -47,7 +48,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Coming back from Settings after granting permission there shouldn't
     // leave the user stuck looking at the denied message.
-    if (state == AppLifecycleState.resumed && _status == _CameraStatus.permanentlyDenied) {
+    if (state == AppLifecycleState.resumed &&
+        _status == _CameraStatus.permanentlyDenied) {
       _bootstrap();
     }
   }
@@ -55,6 +57,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   Future<void> _bootstrap() async {
     try {
       final status = await Permission.camera.status;
+      if (!mounted) return;
       if (status.isGranted) {
         await _startCamera();
         return;
@@ -81,6 +84,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     setState(() => _status = _CameraStatus.requesting);
     try {
       final result = await Permission.camera.request();
+      if (!mounted) return;
       if (result.isGranted) {
         await _startCamera();
       } else if (result.isPermanentlyDenied) {
@@ -103,6 +107,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     setState(() => _status = _CameraStatus.starting);
     try {
       final cameras = await availableCameras();
+      if (!mounted) return;
       if (cameras.isEmpty) {
         setState(() {
           _status = _CameraStatus.error;
@@ -129,6 +134,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         _status = _CameraStatus.ready;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _status = _CameraStatus.error;
         _errorMessage = '$e';
@@ -163,7 +169,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         return _PermissionMessage(
           icon: Icons.camera_alt_outlined,
           title: 'Camera access needed',
-          message: 'mitbo watches the climbing wall through your camera to '
+          message:
+              'mitbo watches the climbing wall through your camera to '
               'track your movement and call out beta live. Grant camera '
               'access to continue.',
           actionLabel: 'Allow camera access',
@@ -173,7 +180,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         return _PermissionMessage(
           icon: Icons.no_photography_outlined,
           title: 'Camera access is off',
-          message: 'Camera access was denied. Enable it for mitbo in your '
+          message:
+              'Camera access was denied. Enable it for mitbo in your '
               'device Settings to use live tracking.',
           actionLabel: 'Open Settings',
           onAction: openAppSettings,
@@ -182,7 +190,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         return const _PermissionMessage(
           icon: Icons.block,
           title: 'Camera unavailable',
-          message: 'Camera access is restricted on this device (for example '
+          message:
+              'Camera access is restricted on this device (for example '
               'by parental controls) and cannot be enabled from here.',
         );
       case _CameraStatus.error:

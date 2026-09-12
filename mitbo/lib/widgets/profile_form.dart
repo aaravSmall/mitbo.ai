@@ -26,10 +26,14 @@ class ProfileForm extends StatefulWidget {
 class _ProfileFormState extends State<ProfileForm> {
   final _formKey = GlobalKey<FormState>();
   late final _heightController = TextEditingController(
-    text: widget.initialProfile != null ? widget.initialProfile!.heightCm.toStringAsFixed(0) : '',
+    text: widget.initialProfile != null
+        ? widget.initialProfile!.heightCm.toStringAsFixed(0)
+        : '',
   );
   late final _wingspanController = TextEditingController(
-    text: widget.initialProfile != null ? widget.initialProfile!.wingspanCm.toStringAsFixed(0) : '',
+    text: widget.initialProfile != null
+        ? widget.initialProfile!.wingspanCm.toStringAsFixed(0)
+        : '',
   );
 
   @override

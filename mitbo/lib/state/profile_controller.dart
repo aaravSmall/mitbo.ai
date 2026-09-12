@@ -9,9 +9,11 @@ import '../services/profile_service.dart';
 /// `ListenableBuilder`) rather than pulling in a state management package —
 /// revisit once app state grows beyond a single profile object.
 class ProfileController extends ChangeNotifier {
-  ProfileController({ProfileService? service}) : _service = service ?? ProfileService();
+  ProfileController({ProfileService? service})
+    : _service = service ?? ProfileService();
 
   final ProfileService _service;
+  bool _disposed = false;
 
   ClimberProfile? _profile;
   ClimberProfile? get profile => _profile;
@@ -20,14 +22,23 @@ class ProfileController extends ChangeNotifier {
   bool get loading => _loading;
 
   Future<void> load() async {
-    _profile = await _service.loadProfile();
+    final profile = await _service.loadProfile();
+    if (_disposed) return;
+    _profile = profile;
     _loading = false;
     notifyListeners();
   }
 
   Future<void> save(ClimberProfile profile) async {
     await _service.saveProfile(profile);
+    if (_disposed) return;
     _profile = profile;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 }

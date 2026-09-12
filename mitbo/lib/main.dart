@@ -32,9 +32,8 @@ class _MitboAppState extends State<MitboApp> {
       routes: [
         GoRoute(
           path: '/splash',
-          builder: (context, state) => const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          ),
+          builder: (context, state) =>
+              const Scaffold(body: Center(child: CircularProgressIndicator())),
         ),
         GoRoute(
           path: '/onboarding',
@@ -46,7 +45,8 @@ class _MitboAppState extends State<MitboApp> {
         ),
         GoRoute(
           path: '/edit-profile',
-          builder: (context, state) => EditProfileScreen(controller: controller),
+          builder: (context, state) =>
+              EditProfileScreen(controller: controller),
         ),
       ],
       redirect: (context, state) {
