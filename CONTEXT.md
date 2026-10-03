@@ -4,12 +4,12 @@ Living document for the current plan, architecture, and reasoning behind mitbo.a
 
 ## What the app does
 
-Point a laptop camera at a bouldering wall. mitbo identifies the problem from where the climber's hands first touch, tracks the climber's body live, generates a beta (move sequence) tailored to their height/reach, and speaks cues via TTS as they climb (e.g. "bring your left hand up to the hold above it").
+A phone app (iOS + Android): prop the phone up hands-free with the back camera pointed at a bouldering wall. mitbo identifies the problem from where the climber's hands first touch, tracks the climber's body live, generates a beta (move sequence) tailored to their height/reach, and speaks cues via TTS as they climb (e.g. "bring your left hand up to the hold above it").
 
 ## Core technical pieces
 
 **A. Human/pose tracking**
-Track hands, feet, hips, and other joints in real time from webcam video. Considered solved / off-the-shelf — plan to use MediaPipe Pose (BlazePose) rather than building this from scratch.
+Track hands, feet, hips, and other joints in real time from the phone's back-camera video. Considered solved / off-the-shelf — plan to use MediaPipe Pose (BlazePose) rather than building this from scratch.
 
 **B. Problem/hold identification**
 The hard part. Need to (1) detect holds on the wall via a vision model, and (2) figure out which holds belong to "this" problem — either via hold color, or by watching which holds the climber actually touches. Gyms don't reliably color-tag holds in a way that's easy to parse from a single frame, so auto-detection is deferred (see v1 scope below).
@@ -27,7 +27,7 @@ Geometry/physics engine does the reasoning; the LLM does the narration. Don't as
 ## v1 scope (current target)
 
 - User manually outlines/taps the holds for their problem on a captured frame (no auto route detection yet).
-- Pose tracking follows the climber live via webcam.
+- Pose tracking follows the climber live via the phone's back camera.
 - System generates a static beta and narrates it via TTS *before* the climb starts (no live-adjustment yet).
 
 ## Open questions / decisions to revisit
@@ -43,3 +43,4 @@ Plan is to test on the builder's own home wall or local gym — this gives a nat
 ## Log
 
 - 2026-09-11: Repo created, initial plan captured (v1–v3 roadmap, geometry-does-reasoning / LLM-does-narration design principle established).
+- 2026-10-03: Platform decided: v1 is a phone app (iOS + Android) using the back camera, propped up hands-free and pointed at the wall — not a laptop webcam app. Docs updated to match. Next step: pose tracking on top of the existing camera preview.

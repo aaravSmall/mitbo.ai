@@ -1,6 +1,6 @@
 # mitbo.ai
 
-An AI bouldering coach. Point a laptop camera at a climbing wall, and mitbo watches you climb — tracking your body in real time and speaking beta (move-by-move instructions) as you go.
+An AI bouldering coach. Prop your phone up hands-free with the back camera pointed at a climbing wall, and mitbo watches you climb — tracking your body in real time and speaking beta (move-by-move instructions) as you go.
 
 ## The idea
 
@@ -18,7 +18,7 @@ Long-term, the goal is a conversational coach: the climber can ask for adjustmen
 This isn't a single-model problem — it's three different problems stacked on top of each other:
 
 - **Hold/route identification** — figuring out which holds belong to "this" problem, from a single wall of mixed/unmarked holds, based on where the climber's hands actually go. This is the least solved piece.
-- **Pose tracking** — tracking hands, feet, and hips in real time from a webcam. This part is largely solved off-the-shelf (e.g. MediaPipe/BlazePose).
+- **Pose tracking** — tracking hands, feet, and hips in real time from the phone's back camera. This part is largely solved off-the-shelf (e.g. MediaPipe/BlazePose).
 - **Beta generation** — this is a spatial reasoning and physical-constraint problem, not something an LLM is good at on its own. It needs a body/reach model plus hold geometry to reason about sequence and crux, with an LLM used only to turn that reasoning into natural spoken language — not to do the reasoning itself.
 
 ## Status
