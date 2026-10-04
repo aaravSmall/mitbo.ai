@@ -4,9 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../beta/beta_narration.dart';
+import '../beta/beta_planner.dart';
+import '../services/beta_narrator.dart';
 import '../services/frame_grabber.dart';
 import '../services/pose_service.dart';
 import '../state/problem_session.dart';
+import '../state/profile_controller.dart';
 import '../vision/hold_segmenter.dart';
 import '../widgets/hold_overlay.dart';
 import '../widgets/pose_debug_chip.dart';
@@ -30,11 +34,19 @@ enum _CameraStatus {
 /// runs pose tracking and automatic problem detection on the camera's image
 /// stream.
 ///
-/// Draws the detected skeleton and the locked problem's holds over the
-/// preview, with a status pill for detection progress. Debug builds add a
-/// bug icon in the app bar for a pose/holds readout and live tuning.
+/// Draws the detected skeleton and the locked problem's holds (numbered
+/// in beta order) over the preview, with a status pill for detection
+/// progress. Once a problem locks, the beta is read aloud with on-device
+/// text-to-speech. Debug builds add a bug icon in the app bar for a
+/// pose/holds readout and live tuning.
 class CameraScreen extends StatefulWidget {
-  const CameraScreen({super.key});
+  const CameraScreen({super.key, this.profileController, this.narrator});
+
+  /// Source of the climber's height and wingspan for the beta.
+  final ProfileController? profileController;
+
+  /// Speaks the beta; defaults to the device's TTS. Injectable for tests.
+  final BetaNarrator? narrator;
 
   @override
   State<CameraScreen> createState() => _CameraScreenState();
@@ -48,6 +60,10 @@ class _CameraScreenState extends State<CameraScreen>
   final PoseService _poseService = PoseService();
   final FrameGrabber _frameGrabber = FrameGrabber();
   late final ProblemSession _problemSession;
+  late final BetaNarrator _narrator = widget.narrator ?? BetaNarrator();
+
+  // The beta most recently read aloud, so each one is narrated once.
+  BetaPlan? _narratedBeta;
 
   // Bumped whenever the camera is stopped, so an in-flight _startCamera can
   // tell it's been superseded and dispose what it created instead.
@@ -67,7 +83,8 @@ class _CameraScreenState extends State<CameraScreen>
     _problemSession = ProblemSession(
       frames: _poseService.latest,
       grabFrame: _frameGrabber.grabNext,
-    );
+      profile: () => widget.profileController?.profile,
+    )..addListener(_onProblemChanged);
     WidgetsBinding.instance.addObserver(this);
     _bootstrap();
   }
@@ -77,8 +94,16 @@ class _CameraScreenState extends State<CameraScreen>
     WidgetsBinding.instance.removeObserver(this);
     // Stop listening to poses before the pose service (and its notifier)
     // goes away below.
-    _problemSession.dispose();
+    _problemSession
+      ..removeListener(_onProblemChanged)
+      ..dispose();
     _frameGrabber.dispose();
+    // Only dispose a narrator this screen created.
+    if (widget.narrator == null) {
+      _narrator.dispose();
+    } else {
+      _narrator.stop();
+    }
     // Stop the stream before closing the detector so no frame reaches it
     // after it's closed.
     _stopCamera().whenComplete(_poseService.dispose);
@@ -95,6 +120,7 @@ class _CameraScreenState extends State<CameraScreen>
         return;
       }
       _suspended = true;
+      _narrator.stop();
       _stopCamera();
       setState(() => _status = _CameraStatus.checking);
       return;
@@ -255,6 +281,27 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  /// Reads a newly planned beta aloud, and stops talking when the problem
+  /// is reset or lost.
+  void _onProblemChanged() {
+    final beta = _problemSession.beta;
+    if (beta == null) {
+      if (_narratedBeta != null) {
+        _narratedBeta = null;
+        _narrator.stop();
+      }
+      return;
+    }
+    if (identical(beta, _narratedBeta)) return;
+    _narratedBeta = beta;
+    _narrator.narrate(betaCues(beta));
+  }
+
+  void _replayBeta() {
+    final beta = _problemSession.beta;
+    if (beta != null) _narrator.narrate(betaCues(beta));
+  }
+
   void _applyDebugSettings(PoseDebugSettings settings) {
     if (!mounted) return;
     if (settings.model != _poseService.model) {
@@ -378,12 +425,16 @@ class _CameraScreenState extends State<CameraScreen>
               bottom: 16,
               child: Center(
                 child: ListenableBuilder(
-                  listenable: _problemSession,
+                  listenable: Listenable.merge([_problemSession, _narrator]),
                   builder: (context, _) => ProblemStatusPill(
                     phase: _problemSession.phase,
                     problem: _problemSession.problem,
+                    beta: _problemSession.beta,
                     failureReason: _problemSession.failureReason,
+                    speaking: _narrator.speaking,
                     onReset: _problemSession.resetProblem,
+                    onReplay: _replayBeta,
+                    onStopSpeaking: _narrator.stop,
                   ),
                 ),
               ),

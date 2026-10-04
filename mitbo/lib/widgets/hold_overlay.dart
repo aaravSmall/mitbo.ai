@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
+import '../beta/beta_planner.dart';
 import '../state/problem_session.dart';
 import '../vision/hold_segmenter.dart';
 import 'pose_mapping.dart';
 
 /// Outlines the locked problem's holds over the camera preview, marking
-/// start holds "S" and the top hold "T".
+/// start holds "S" and the top hold "T", and numbering the hand moves of
+/// the beta in order ("1L", "2R", ...).
 ///
 /// Must be sized to exactly cover the preview (like `PoseOverlay`).
 class HoldOverlay extends StatelessWidget {
@@ -62,6 +64,7 @@ class HoldPainter extends CustomPainter {
     if (problem == null || imageSize == null) return;
 
     final top = problem.topHold;
+    final steps = betaStepLabels(session.beta);
     for (var i = 0; i < problem.holds.length; i++) {
       final hold = problem.holds[i];
       final isStart = problem.startHoldIndices.contains(i);
@@ -90,10 +93,17 @@ class HoldPainter extends CustomPainter {
       );
       if (isStart) _label(canvas, 'S', rect);
       if (isTop) _label(canvas, 'T', rect);
+      final step = steps[i];
+      if (step != null) _label(canvas, step, rect, below: true);
     }
   }
 
-  static void _label(Canvas canvas, String text, Rect rect) {
+  static void _label(
+    Canvas canvas,
+    String text,
+    Rect rect, {
+    bool below = false,
+  }) {
     final painter = TextPainter(
       text: TextSpan(
         text: text,
@@ -108,7 +118,7 @@ class HoldPainter extends CustomPainter {
     const padding = 3.0;
     final badge = Rect.fromLTWH(
       rect.left - padding,
-      rect.top - painter.height - padding * 2,
+      below ? rect.bottom + padding : rect.top - painter.height - padding * 2,
       painter.width + padding * 2,
       painter.height + padding,
     );
@@ -122,4 +132,21 @@ class HoldPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(HoldPainter oldDelegate) => oldDelegate.session != session;
+}
+
+/// Labels for the holds hand moves land on, keyed by hold index: the move
+/// number and hand, e.g. "1L", or "5R 6L" for a hold used twice.
+Map<int, String> betaStepLabels(BetaPlan? beta) {
+  final labels = <int, String>{};
+  if (beta == null) return labels;
+  var step = 0;
+  for (final move in beta.moves) {
+    if (!move.limb.isHand) continue;
+    step++;
+    final hold = move.toHold;
+    if (hold == null) continue;
+    final label = '$step${move.limb.isLeft ? 'L' : 'R'}';
+    labels[hold] = labels.containsKey(hold) ? '${labels[hold]} $label' : label;
+  }
+  return labels;
 }

@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
+import 'package:mitbo/beta/beta_planner.dart';
 import 'package:mitbo/models/climber_keypoints.dart';
+import 'package:mitbo/models/climber_profile.dart';
 import 'package:mitbo/services/pose_service.dart';
 import 'package:mitbo/state/problem_session.dart';
 import 'package:mitbo/vision/hold_color.dart';
@@ -125,6 +127,9 @@ void main() {
       expect(h.session.phase, ProblemPhase.locked);
       expect(h.session.problem, same(_redProblem));
       expect(h.session.problemImageSize, const Size(2, 2));
+      // A beta is planned as soon as the problem locks.
+      expect(h.session.beta, isNotNull);
+      expect(h.session.beta!.holds, hasLength(_redProblem.holds.length));
       expect(phases, [
         ProblemPhase.ready,
         ProblemPhase.detecting,
@@ -187,6 +192,7 @@ void main() {
       h.session.resetProblem();
       expect(h.session.phase, ProblemPhase.ready);
       expect(h.session.problem, isNull);
+      expect(h.session.beta, isNull);
       expect(h.session.reference, same(h.wall));
 
       h.emit(_handsOnStart, fromMs: 2400, toMs: 3600);
@@ -294,6 +300,51 @@ void main() {
       expect(find.text('Red problem · 3 holds'), findsOneWidget);
       await tester.tap(find.text('Reset'));
       expect(resets, 1);
+    });
+
+    testWidgets('pill shows the move count and replays the beta', (
+      tester,
+    ) async {
+      final beta = planBeta(
+        _redProblem,
+        const StartPosition(
+          leftHand: Keypoint(0.5, 0.5, 0.9),
+          rightHand: Keypoint(0.5, 0.5, 0.9),
+        ),
+        profile: const ClimberProfile(heightCm: 170, wingspanCm: 170),
+        aspect: 0.75,
+      );
+      var replays = 0;
+      var stops = 0;
+      Future<void> pump({required bool speaking}) => tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: ProblemStatusPill(
+                phase: ProblemPhase.locked,
+                problem: _redProblem,
+                beta: beta,
+                speaking: speaking,
+                onReplay: () => replays++,
+                onStopSpeaking: () => stops++,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await pump(speaking: false);
+      final moves = beta.handMoveCount;
+      expect(
+        find.text('Red problem · 3 holds · $moves ${moves == 1 ? 'move' : 'moves'}'),
+        findsOneWidget,
+      );
+      await tester.tap(find.byTooltip('Replay beta'));
+      expect(replays, 1);
+
+      await pump(speaking: true);
+      await tester.tap(find.byTooltip('Stop'));
+      expect(stops, 1);
     });
   });
 

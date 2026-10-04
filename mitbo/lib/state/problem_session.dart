@@ -3,6 +3,8 @@ import 'dart:ui' show Size;
 
 import 'package:flutter/foundation.dart';
 
+import '../beta/beta_planner.dart';
+import '../models/climber_profile.dart';
 import '../services/pose_service.dart';
 import '../vision/hold_segmenter.dart';
 import '../vision/problem_detector.dart';
@@ -42,20 +44,26 @@ Future<ProblemResult> _detectInIsolate(
   SegmentationParams params,
 ) => Isolate.run(() => detectProblem(reference, start, params: params));
 
+/// Used when no profile is available (shouldn't happen past onboarding).
+const _defaultProfile = ClimberProfile(heightCm: 170, wingspanCm: 170);
+
 /// Drives automatic problem detection from the live pose stream: keeps a
 /// clean wall reference, waits for the climber to settle on the start
-/// holds, then finds the problem's holds by color.
+/// holds, finds the problem's holds by color, then plans a beta for the
+/// climber's reach.
 class ProblemSession extends ChangeNotifier {
   ProblemSession({
     required ValueListenable<PoseFrame?> frames,
     required Future<WallFrame?> Function() grabFrame,
     ProblemDetectionRunner detect = _detectInIsolate,
+    ClimberProfile? Function()? profile,
     Duration Function()? clock,
     WallReferenceTracker? referenceTracker,
     StartDetector? startDetector,
   }) : _frames = frames,
        _grabFrame = grabFrame,
        _detect = detect,
+       _profile = profile ?? (() => null),
        _clock = clock ?? _stopwatchClock(),
        _tracker = referenceTracker ?? WallReferenceTracker(),
        _startDetector = startDetector ?? StartDetector() {
@@ -70,12 +78,14 @@ class ProblemSession extends ChangeNotifier {
   final ValueListenable<PoseFrame?> _frames;
   final Future<WallFrame?> Function() _grabFrame;
   final ProblemDetectionRunner _detect;
+  final ClimberProfile? Function() _profile;
   final Duration Function() _clock;
   final WallReferenceTracker _tracker;
   final StartDetector _startDetector;
 
   ProblemPhase _phase = ProblemPhase.scanningWall;
   DetectedProblem? _problem;
+  BetaPlan? _beta;
   String? _failureReason;
   SegmentationParams _params = const SegmentationParams();
   bool _grabbing = false;
@@ -93,6 +103,9 @@ class ProblemSession extends ChangeNotifier {
 
   /// The locked problem, when [phase] is [ProblemPhase.locked].
   DetectedProblem? get problem => _problem;
+
+  /// The planned beta for [problem], when [phase] is [ProblemPhase.locked].
+  BetaPlan? get beta => _beta;
 
   /// Why detection failed, when [phase] is [ProblemPhase.failed].
   String? get failureReason => _failureReason;
@@ -170,6 +183,7 @@ class ProblemSession extends ChangeNotifier {
     _detectionStart = start;
     _phase = ProblemPhase.detecting;
     _problem = null;
+    _beta = null;
     _failureReason = null;
     notifyListeners();
 
@@ -186,6 +200,7 @@ class ProblemSession extends ChangeNotifier {
       case ProblemFound(:final problem):
         _phase = ProblemPhase.locked;
         _problem = problem;
+        _beta = _plan(problem, reference, start);
       case ProblemFailed(:final reason):
         _phase = ProblemPhase.failed;
         _failureReason = reason;
@@ -193,6 +208,24 @@ class ProblemSession extends ChangeNotifier {
         _startDetector.reset(requireMove: true);
     }
     notifyListeners();
+  }
+
+  BetaPlan? _plan(
+    DetectedProblem problem,
+    WallFrame reference,
+    StartPosition start,
+  ) {
+    try {
+      return planBeta(
+        problem,
+        start,
+        profile: _profile() ?? _defaultProfile,
+        aspect: reference.width / reference.height,
+      );
+    } catch (e) {
+      debugPrint('Beta planning failed: $e');
+      return null;
+    }
   }
 
   /// Drops the current problem and waits for a new start, keeping the
@@ -224,6 +257,7 @@ class ProblemSession extends ChangeNotifier {
 
   void _clearProblem() {
     _problem = null;
+    _beta = null;
     _failureReason = null;
     _detectionReference = null;
     _detectionStart = null;
