@@ -2,11 +2,11 @@
 
 Version roadmap for mitbo.ai, roughly in order of increasing difficulty. Each version depends on the previous being solid — don't skip ahead on the hard pieces (route detection, live conversation) before pose tracking + beta generation are working well.
 
-## v1 — Auto color-based holds, static beta (MVP)
+## v1 — Auto color-based holds, static beta (MVP) — ✅ feature-complete in code (2026-10-04)
 
 - ✅ **Done in code (2026-10-04):** Holds are detected automatically by color: when the climber settles on the start holds, mitbo samples their color from a clean wall reference frame and treats every same-color hold in frame as the problem. No manual hold marking, no per-climb setup. Real-device/gym validation still pending.
 - ✅ **Done (2026-10-03):** Pose tracking (ML Kit pose detection, BlazePose-based) follows the climber live via the phone's back camera (phone propped up hands-free, pointed at the wall), producing smoothed hand/foot/hip keypoints for the beta engine. Real-device/gym validation still pending.
-- System generates a beta sequence from hold geometry + climber height/reach, and narrates it via TTS **before** the climb starts.
+- ✅ **Done in code (2026-10-04):** System generates a beta sequence from hold geometry + climber height/reach (scaled by torso length in frame), and narrates it via on-device TTS **before** the climb starts, with replay/stop. Holds are numbered in beta order on the overlay.
 - No live adjustment — the beta is generated once, spoken once.
 
 ## v2 — Live cue triggering

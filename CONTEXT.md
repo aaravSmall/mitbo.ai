@@ -27,10 +27,14 @@ The color is sampled from a clean **wall reference frame** captured while nobody
 *Known v1 limits:* white/black/gray holds (low saturation) are harder to separate from the wall; holds hidden by the climber are missed unless they were visible in the reference frame; volumes and wall paint close to the hold color can cause false positives.
 
 **C. Beta generation**
-Not an LLM-native task. Treated as geometry/physical-constraint reasoning: a simplified body model (limb reach as a function of height/wingspan) plus hold geometry (position, type, angle) generates a plausible move sequence and flags likely cruxes. An LLM is used only downstream, to turn that structured sequence into natural spoken language — the LLM narrates, it does not decide the sequence.
+Not an LLM-native task. Treated as geometry/physical-constraint reasoning: a simplified body model (limb reach as a function of height/wingspan) plus hold geometry generates a plausible move sequence. Implemented in `lib/beta/beta_planner.dart`:
+- *Scale:* the climber's torso (shoulder center → hip center ≈ 29% of height) at the start position converts image distances to centimeters. Falls back to assuming 3.5 m of visible wall when the torso isn't measurable.
+- *Reach model:* max hand span 0.9 × wingspan; max reach above the higher foot = shoulder height (0.87 × height incl. toes) + arm (wingspan/2 − 0.1 × height); ideal gain per move 0.35 × wingspan; feet stay ≥ 0.45 × height below the lower hand; high steps ≤ 0.6 × height.
+- *Sequencing:* the lower hand moves to the reachable hold above it closest to the ideal gain over the other hand, penalizing crosses, stacking and near-max stretches; a foot steps up (onto a hold, or a smear) when hands run out of reach; if nothing is comfortably reachable the nearest hold above is a "big move"; finish matched on the top hold.
+Narration is a separate layer (`beta_narration.dart`) that only phrases the planned moves. v1 uses plain templates (offline, predictable); an LLM can replace that layer later without touching the planner.
 
 **D. Text-to-speech delivery**
-Spoken cues delivered during the climb. v1 is pre-generated/static narration before the climb starts; live-triggered cues come later (see FUTURE_PLANS.md).
+Spoken cues via the phone's built-in, on-device TTS (`flutter_tts`). v1 reads the whole beta once, as soon as the problem locks (the climber is on the start holds), with a replay/stop button; live-triggered cues come later (see FUTURE_PLANS.md).
 
 ## Design principle
 
@@ -40,12 +44,14 @@ Geometry/physics engine does the reasoning; the LLM does the narration. Don't as
 
 - Automatic, color-based hold detection: the problem is identified from the color of the start holds the climber's hands settle on (see B above). No manual hold marking, no per-climb setup. **Done in code** (2026-10-04, `hold-detection` branch); not yet run on a device or at the gym.
 - Pose tracking follows the climber live via the phone's back camera. **Done in code** (2026-10-03); real-device and gym testing pending.
-- System generates a static beta and narrates it via TTS *before* the climb starts (no live-adjustment yet).
+- System generates a static beta and narrates it via TTS *before* the climb starts (no live-adjustment yet). **Done in code** (2026-10-04).
+
+**v1 is feature-complete in code.** Remaining before calling it shipped: compile/test on a real machine (`flutter analyze`, `flutter test`), then the gym test checklist below.
 
 ## Open questions / decisions to revisit
 
-- Camera calibration: how do we map 2D wall-hold positions + a single camera angle into real-world reach distances? Likely needs a reference scale (e.g. known hold spacing, or a calibration step where the climber stands at a known distance).
-- Body proportions input: ask the climber for height/wingspan directly, or estimate from pose landmarks + camera distance?
+- ~~Camera calibration~~ — v1 answer: the climber's torso length in frame sets the scale (see C). Assumes the wall is roughly flat and facing the camera; steep angles or overhangs will distort distances.
+- ~~Body proportions input~~ — v1 answer: ask once in onboarding (height/wingspan), editable later.
 - What counts as a "crux" in the geometry model — largest reach-to-limb-length ratio? Worst hold quality combined with reach? (Deferred to v2.)
 - Telling holds apart from wall paint, volumes, and other features of a similar color — size/shape filtering is the v1 answer; a learned hold detector is the v3 answer.
 
@@ -84,3 +90,4 @@ Plan is to test on the builder's own home wall or local gym — this gives a nat
 - 2026-10-03: Pose tracking milestone done in code. ML Kit pose detection (stream mode) runs on the back-camera stream with a skeleton overlay; `ClimberKeypoints` turns each pose into smoothed, normalized hands/feet/hip-center points with confidences for the beta engine. Debug-only tools (debug builds only, compiled out of release): FPS/landmark chip, smoothed-keypoint view, base/accurate model switch, live alpha and hand-nudge sliders. iOS camera permission fixed (Podfile `PERMISSION_CAMERA=1`). Verified on one Android phone (33 landmarks detected); overlay alignment, the keypoints/debug tools, iOS on a real device, and testing at the gym/home wall are still pending. Next: manual hold marking on a captured frame.
 - 2026-10-04: Hold identification decided: v1 is fully automatic and color-based (no manual tapping). Color is sampled from a clean wall reference frame at the start holds; all same-color holds in frame form the problem. Crux identification moved to v2. Docs updated to match.
 - 2026-10-04: Hold detection milestone done in code (on the `hold-detection` branch; not compiled in the workspace that wrote it, so `flutter analyze` / `flutter test` must be run before merging). Pipeline: `FrameGrabber` hands out upright 320 px `WallFrame` snapshots on demand (no per-frame cost otherwise); `WallReferenceTracker` keeps a clean wall snapshot while nobody is in frame; `StartDetector` fires when both hands settle above the hips for 1.2 s; `detectProblem` samples the start-hold color from the snapshot and segments every same-color hold (HSV mask, open/close, connected components, size/shape filters), running in an isolate. `ProblemSession` drives it live; `HoldOverlay` outlines the holds (S = start, T = top) and a status pill shows progress with Reset. Debug: wall reference thumbnail, sampled HSV readout, hue-tolerance/min-saturation sliders. Next: run the gym test checklist above, then the beta engine.
+- 2026-10-04: Beta engine and TTS done in code — v1 feature-complete. `planBeta` sequences moves from hold geometry + a height/wingspan reach model, scaled by torso length in frame; `betaCues` phrases them ("Left hand up to the hold above your right hand."); `BetaNarrator` reads them with on-device TTS as soon as the problem locks, with replay/stop on the status pill, and the overlay numbers each hand move on its hold. Not compiled in the authoring workspace — run `flutter pub get && flutter analyze && flutter test` before merging.
