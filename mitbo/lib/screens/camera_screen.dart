@@ -1,13 +1,17 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../holds/problem.dart';
 import '../services/pose_service.dart';
+import '../widgets/holds_overlay.dart';
 import '../widgets/pose_debug_chip.dart';
 import '../widgets/pose_debug_sheet.dart';
 import '../widgets/pose_overlay.dart';
+import 'hold_marking_screen.dart';
 
 enum _CameraStatus {
   checking,
@@ -47,6 +51,16 @@ class _CameraScreenState extends State<CameraScreen>
   // so it should be restarted on resume.
   bool _suspended = false;
 
+  // The marked problem, drawn under the skeleton. Not persisted yet.
+  Problem? _problem;
+
+  // True from tapping "Mark holds" until the marking screen closes.
+  bool _markingHolds = false;
+
+  // True only while the marking screen is open. The camera is stopped then
+  // and restarted when it closes, so resuming the app mustn't restart it.
+  bool _holdScreenOpen = false;
+
   // Debug builds only (the toggle is hidden otherwise).
   bool _showPoseDebug = false;
   PoseDebugSettings _debugSettings = const PoseDebugSettings();
@@ -83,7 +97,9 @@ class _CameraScreenState extends State<CameraScreen>
     }
     // Coming back from Settings after granting permission there shouldn't
     // leave the user stuck looking at the denied message.
+    // The marking screen restarts the camera itself when it closes.
     if (state == AppLifecycleState.resumed &&
+        !_holdScreenOpen &&
         (_suspended || _status == _CameraStatus.permanentlyDenied)) {
       _suspended = false;
       _bootstrap();
@@ -227,6 +243,71 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  /// Freezes the current frame and opens the hold marking screen on it.
+  ///
+  /// The camera (and so pose detection) is stopped while marking, the same
+  /// way it is when the app is backgrounded, and restarted on return.
+  Future<void> _markHolds() async {
+    final controller = _controller;
+    if (controller == null || _status != _CameraStatus.ready) return;
+    if (_markingHolds) return;
+    setState(() => _markingHolds = true);
+
+    final previewAspectRatio = _previewAspectRatio(controller);
+    final HoldMarkingArgs args;
+    try {
+      final frame = await _poseService.captureNextFrame().timeout(
+        const Duration(seconds: 3),
+      );
+      args = HoldMarkingArgs(
+        frame: frame,
+        previewAspectRatio: previewAspectRatio,
+        initialProblem: _problem,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _markingHolds = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't capture a frame. Try again.")),
+      );
+      return;
+    }
+    // The camera may have been stopped (e.g. backgrounded) meanwhile.
+    if (!mounted || _controller != controller) {
+      if (mounted) setState(() => _markingHolds = false);
+      return;
+    }
+
+    _stopCamera();
+    setState(() {
+      _status = _CameraStatus.checking;
+      _holdScreenOpen = true;
+    });
+    final result = await context.push<Problem>('/hold-marking', extra: args);
+    if (!mounted) return;
+    setState(() {
+      _holdScreenOpen = false;
+      _markingHolds = false;
+      if (result != null) _problem = result;
+    });
+    // Restarts the camera; _startCamera resets pose tracking.
+    _bootstrap();
+  }
+
+  /// Width / height of the box [CameraPreview] lays itself out in, which
+  /// depends on orientation the same way it does there.
+  static double _previewAspectRatio(CameraController controller) {
+    final value = controller.value;
+    final orientation =
+        value.previewPauseOrientation ??
+        value.lockedCaptureOrientation ??
+        value.deviceOrientation;
+    final landscape =
+        orientation == DeviceOrientation.landscapeLeft ||
+        orientation == DeviceOrientation.landscapeRight;
+    return landscape ? value.aspectRatio : 1 / value.aspectRatio;
+  }
+
   void _applyDebugSettings(PoseDebugSettings settings) {
     if (!mounted) return;
     if (settings.model != _poseService.model) {
@@ -319,13 +400,48 @@ class _CameraScreenState extends State<CameraScreen>
             Center(
               child: CameraPreview(
                 controller,
-                child: PoseOverlay(
-                  frames: _poseService.latest,
-                  showKeypoints:
-                      kDebugMode &&
-                      _showPoseDebug &&
-                      _debugSettings.showKeypoints,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (_problem case final problem?)
+                      HoldsOverlay(problem: problem),
+                    PoseOverlay(
+                      frames: _poseService.latest,
+                      showKeypoints:
+                          kDebugMode &&
+                          _showPoseDebug &&
+                          _debugSettings.showKeypoints,
+                    ),
+                  ],
                 ),
+              ),
+            ),
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  FilledButton.icon(
+                    icon: _markingHolds
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.touch_app_outlined),
+                    label: Text(_problem == null ? 'Mark holds' : 'Edit holds'),
+                    onPressed: _markingHolds ? null : _markHolds,
+                  ),
+                  if (_problem != null) ...[
+                    const SizedBox(width: 12),
+                    FilledButton.tonalIcon(
+                      icon: const Icon(Icons.clear),
+                      label: const Text('Clear holds'),
+                      onPressed: () => setState(() => _problem = null),
+                    ),
+                  ],
+                ],
               ),
             ),
             // kDebugMode first so release builds compile the chip out.

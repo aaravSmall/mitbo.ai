@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import 'screens/camera_screen.dart';
 import 'screens/edit_profile_screen.dart';
+import 'screens/hold_marking_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'state/profile_controller.dart';
 
@@ -44,6 +45,11 @@ class _MitboAppState extends State<MitboApp> {
           builder: (context, state) => const CameraScreen(),
         ),
         GoRoute(
+          path: '/hold-marking',
+          builder: (context, state) =>
+              HoldMarkingScreen(args: state.extra! as HoldMarkingArgs),
+        ),
+        GoRoute(
           path: '/edit-profile',
           builder: (context, state) =>
               EditProfileScreen(controller: controller),
@@ -60,6 +66,11 @@ class _MitboAppState extends State<MitboApp> {
         }
         if (!hasProfile && location != '/onboarding') return '/onboarding';
         if (hasProfile && location == '/onboarding') return '/camera';
+        // The marking screen needs a captured frame; it can't be opened
+        // directly (e.g. by a deep link or after a restart).
+        if (location == '/hold-marking' && state.extra is! HoldMarkingArgs) {
+          return '/camera';
+        }
         return null;
       },
     );

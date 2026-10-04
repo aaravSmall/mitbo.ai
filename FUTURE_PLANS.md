@@ -4,7 +4,8 @@ Version roadmap for mitbo.ai, roughly in order of increasing difficulty. Each ve
 
 ## v1 — Manual holds, static beta (MVP)
 
-- User captures a photo of the wall and manually taps/outlines the holds that make up their problem (no auto route detection).
+- ✅ **Done (2026-10-03):** User captures a frame of the wall and manually taps/resizes the holds that make up their problem, and picks the problem color from a hold. Real-device validation and saving problems are still pending.
+- **Next:** color-based auto-detection behind the existing `HoldDetector` interface (`lib/holds/hold_detector.dart`), replacing `NoopHoldDetector`: given the picked problem color, find the other holds of that color on the captured frame and add them as `HoldSource.auto` holds the user can then fix up.
 - ✅ **Done (2026-10-03):** Pose tracking (ML Kit pose detection, BlazePose-based) follows the climber live via the phone's back camera (phone propped up hands-free, pointed at the wall), producing smoothed hand/foot/hip keypoints for the beta engine. Real-device/gym validation still pending.
 - System generates a beta sequence from hold geometry + climber height/reach, and narrates it via TTS **before** the climb starts.
 - No live adjustment — the beta is generated once, spoken once.
@@ -16,7 +17,7 @@ Version roadmap for mitbo.ai, roughly in order of increasing difficulty. Each ve
 
 ## v3 — Auto hold detection
 
-- Replace manual hold-tapping with a vision model that detects all holds on the wall automatically.
+- Replace manual hold-tapping with a vision model that detects all holds on the wall automatically (plugs in behind the same `HoldDetector` interface as the v1 color-based detector).
 - Infer which holds belong to "this" problem from the climber's actual path (which holds get touched first/in sequence), rather than relying on gym color-coding.
 
 ## v4 — Live conversational feedback

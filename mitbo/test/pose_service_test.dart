@@ -460,4 +460,75 @@ void main() {
       expect(() => service.alpha = 1.5, throwsArgumentError);
     });
   });
+
+  group('captureNextFrame', () {
+    setUp(() => debugDefaultTargetPlatformOverride = TargetPlatform.android);
+
+    // A real 4x2 NV21 frame (Y plane + half-res VU), mid gray.
+    CameraImage nv21Gray() => CameraImage.fromPlatformInterface(
+      CameraImageData(
+        format: const CameraImageFormat(ImageFormatGroup.nv21, raw: 17),
+        width: 4,
+        height: 2,
+        planes: [
+          CameraImagePlane(
+            bytes: Uint8List.fromList(List.filled(12, 128)),
+            bytesPerRow: 4,
+          ),
+        ],
+      ),
+    );
+
+    test(
+      'converts the next frame upright (rotation 90 swaps its size)',
+      () async {
+        final service = PoseService(createDetector: (_) => _FakeDetector());
+        final capture = service.captureNextFrame();
+        // The fake detector never finishes, so don't wait for detection.
+        unawaited(_process(service, nv21Gray()));
+
+        final frame = await capture;
+        expect(frame.width, 2);
+        expect(frame.height, 4);
+        expect(frame.rgba.sublist(0, 4), [128, 128, 128, 255]);
+      },
+    );
+
+    test('is served even while a detection is running', () async {
+      final detector = _FakeDetector();
+      final service = PoseService(createDetector: (_) => detector);
+      final detecting = _process(service, nv21Gray());
+
+      final capture = service.captureNextFrame();
+      await _process(service, nv21Gray());
+      expect(detector.pending, hasLength(1), reason: 'frame still dropped');
+      expect((await capture).width, 2);
+
+      detector.pending.single.complete([]);
+      await detecting;
+    });
+
+    test('concurrent requests share the next frame', () async {
+      final service = PoseService(createDetector: (_) => _FakeDetector());
+      final a = service.captureNextFrame();
+      final b = service.captureNextFrame();
+      unawaited(_process(service, nv21Gray()));
+      expect(identical(await a, await b), isTrue);
+    });
+
+    test('reset fails a pending capture', () async {
+      final service = PoseService(createDetector: (_) => _FakeDetector());
+      final capture = service.captureNextFrame();
+      service.reset();
+      await expectLater(capture, throwsStateError);
+    });
+
+    test('dispose fails a pending capture, and later requests', () async {
+      final service = PoseService(createDetector: (_) => _FakeDetector());
+      final capture = expectLater(service.captureNextFrame(), throwsStateError);
+      await service.dispose();
+      await capture;
+      await expectLater(service.captureNextFrame(), throwsStateError);
+    });
+  });
 }
