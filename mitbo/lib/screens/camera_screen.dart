@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../services/pose_service.dart';
+
 enum _CameraStatus {
   checking,
   needsRationale,
@@ -14,9 +16,10 @@ enum _CameraStatus {
   error,
 }
 
-/// Shows a live back-camera preview once camera permission is granted.
+/// Shows a live back-camera preview once camera permission is granted, and
+/// runs pose tracking on the camera's image stream.
 ///
-/// No pose tracking, overlays, or recording here — just a stable preview.
+/// No overlay drawing yet — only a debug readout of the landmark count.
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
 
@@ -29,6 +32,15 @@ class _CameraScreenState extends State<CameraScreen>
   _CameraStatus _status = _CameraStatus.checking;
   CameraController? _controller;
   String? _errorMessage;
+  final PoseService _poseService = PoseService();
+
+  // Bumped whenever the camera is stopped, so an in-flight _startCamera can
+  // tell it's been superseded and dispose what it created instead.
+  int _cameraGeneration = 0;
+
+  // True when the camera was torn down because the app was backgrounded,
+  // so it should be restarted on resume.
+  bool _suspended = false;
 
   @override
   void initState() {
@@ -40,16 +52,31 @@ class _CameraScreenState extends State<CameraScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _controller?.dispose();
+    // Stop the stream before closing the detector so no frame reaches it
+    // after it's closed.
+    _stopCamera().whenComplete(_poseService.dispose);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      // Release the camera while backgrounded; it's restarted on resume.
+      // Only once it's starting or running — pausing mid permission request
+      // (Android shows the dialog as its own activity) must not interrupt it.
+      if (_status != _CameraStatus.starting && _status != _CameraStatus.ready) {
+        return;
+      }
+      _suspended = true;
+      _stopCamera();
+      setState(() => _status = _CameraStatus.checking);
+      return;
+    }
     // Coming back from Settings after granting permission there shouldn't
     // leave the user stuck looking at the denied message.
     if (state == AppLifecycleState.resumed &&
-        _status == _CameraStatus.permanentlyDenied) {
+        (_suspended || _status == _CameraStatus.permanentlyDenied)) {
+      _suspended = false;
       _bootstrap();
     }
   }
@@ -103,11 +130,41 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  /// Stops the image stream and releases the camera, if one is running.
+  ///
+  /// Clears [_controller] synchronously; callers that stay mounted must
+  /// rebuild so the preview isn't left pointing at a disposed controller.
+  Future<void> _stopCamera() async {
+    _cameraGeneration++;
+    final controller = _controller;
+    _controller = null;
+    if (controller == null) return;
+    try {
+      if (controller.value.isStreamingImages) {
+        await controller.stopImageStream();
+      }
+    } catch (e) {
+      debugPrint('Failed to stop image stream: $e');
+    }
+    try {
+      await controller.dispose();
+    } catch (e) {
+      debugPrint('Failed to dispose camera: $e');
+    }
+  }
+
   Future<void> _startCamera() async {
+    // The retry flow can land here with a camera still running.
+    await _stopCamera();
+    if (!mounted) return;
+    final generation = _cameraGeneration;
+    bool superseded() => !mounted || generation != _cameraGeneration;
+
     setState(() => _status = _CameraStatus.starting);
+    CameraController? controller;
     try {
       final cameras = await availableCameras();
-      if (!mounted) return;
+      if (superseded()) return;
       if (cameras.isEmpty) {
         setState(() {
           _status = _CameraStatus.error;
@@ -119,22 +176,39 @@ class _CameraScreenState extends State<CameraScreen>
         (c) => c.lensDirection == CameraLensDirection.back,
         orElse: () => cameras.first,
       );
-      final controller = CameraController(
+      final newController = controller = CameraController(
         backCamera,
         ResolutionPreset.high,
         enableAudio: false,
+        imageFormatGroup: PoseService.imageFormatGroup,
       );
-      await controller.initialize();
-      if (!mounted) {
-        await controller.dispose();
+      await newController.initialize();
+      if (superseded()) {
+        await newController.dispose();
+        return;
+      }
+      await newController.startImageStream(
+        (image) => _poseService.processCameraImage(
+          image,
+          camera: backCamera,
+          deviceOrientation: newController.value.deviceOrientation,
+        ),
+      );
+      if (superseded()) {
+        await newController.stopImageStream();
+        await newController.dispose();
         return;
       }
       setState(() {
-        _controller = controller;
+        _controller = newController;
         _status = _CameraStatus.ready;
       });
     } catch (e) {
-      if (!mounted) return;
+      // Don't leak a controller that failed partway through starting.
+      if (controller != null && controller != _controller) {
+        await controller.dispose();
+      }
+      if (superseded()) return;
       setState(() {
         _status = _CameraStatus.error;
         _errorMessage = '$e';
@@ -207,11 +281,39 @@ class _CameraScreenState extends State<CameraScreen>
         if (controller == null || !controller.value.isInitialized) {
           return const Center(child: CircularProgressIndicator());
         }
-        return Center(
-          child: AspectRatio(
-            aspectRatio: controller.value.aspectRatio,
-            child: CameraPreview(controller),
-          ),
+        return Stack(
+          children: [
+            Center(
+              child: AspectRatio(
+                aspectRatio: controller.value.aspectRatio,
+                child: CameraPreview(controller),
+              ),
+            ),
+            // Temporary debug readout until the skeleton overlay lands.
+            Positioned(
+              left: 12,
+              top: 12,
+              child: ValueListenableBuilder<PoseFrame?>(
+                valueListenable: _poseService.latest,
+                builder: (context, frame, _) => DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    child: Text(
+                      'Landmarks: ${frame?.pose?.landmarks.length ?? 0}',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         );
     }
   }

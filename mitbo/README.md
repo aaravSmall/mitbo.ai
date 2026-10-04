@@ -10,7 +10,7 @@ Flutter app targeting iOS and Android. It currently has one-time height/wingspan
 
 - `lib/screens/` — top-level app screens
 - `lib/widgets/` — reusable UI components
-- `lib/services/` — device/platform integrations (camera, TTS, etc. — not yet added)
+- `lib/services/` — device/platform integrations: `profile_service.dart` (saves the climber profile on the device) and `pose_service.dart` (ML Kit pose detection on camera frames). The camera UI lives in `lib/screens/camera_screen.dart`.
 - `lib/models/` — data models
 - `lib/state/` — app state management
 
