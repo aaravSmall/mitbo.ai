@@ -6,66 +6,7 @@ import 'package:mitbo/vision/hold_color.dart';
 import 'package:mitbo/vision/hold_segmenter.dart';
 import 'package:mitbo/vision/wall_frame.dart';
 
-typedef _Rgb = (int, int, int);
-
-const _red = (220, 40, 40);
-const _blue = (40, 60, 220);
-const _yellow = (230, 210, 40);
-const _white = (235, 235, 235);
-
-/// Deterministic per-pixel noise in [-10, 10].
-int _noise(int x, int y) => ((x * 73856093) ^ (y * 19349663)) % 21 - 10;
-
-/// A synthetic wall: noisy mid-gray, painted on with [paint].
-class _Wall {
-  _Wall(this.width, this.height) : rgb = Uint8List(width * height * 3) {
-    for (var y = 0; y < height; y++) {
-      for (var x = 0; x < width; x++) {
-        final g = 128 + _noise(x, y);
-        set(x, y, (g, g, g));
-      }
-    }
-  }
-
-  final int width;
-  final int height;
-  final Uint8List rgb;
-
-  void set(int x, int y, _Rgb c) {
-    if (x < 0 || y < 0 || x >= width || y >= height) return;
-    final i = (y * width + x) * 3;
-    rgb[i] = c.$1;
-    rgb[i + 1] = c.$2;
-    rgb[i + 2] = c.$3;
-  }
-
-  void disc(int cx, int cy, int r, _Rgb c) {
-    for (var y = cy - r; y <= cy + r; y++) {
-      for (var x = cx - r; x <= cx + r; x++) {
-        if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r) set(x, y, c);
-      }
-    }
-  }
-
-  void rect(int x0, int y0, int x1, int y1, _Rgb c) {
-    for (var y = y0; y < y1; y++) {
-      for (var x = x0; x < x1; x++) {
-        set(x, y, c);
-      }
-    }
-  }
-
-  /// A 45° streak, [thickness] pixels across, from ([x0], [y0]).
-  void diagonal(int x0, int y0, int length, int thickness, _Rgb c) {
-    for (var i = 0; i < length; i++) {
-      for (var t = 0; t < thickness; t++) {
-        set(x0 + i + t, y0 + i, c);
-      }
-    }
-  }
-
-  WallFrame get frame => WallFrame(width, height, rgb);
-}
+import 'support/synthetic_wall.dart';
 
 const _w = 320;
 const _h = 400;
@@ -74,15 +15,15 @@ const _h = 400;
 const _redHolds = [(60, 50), (200, 90), (110, 170), (250, 260), (80, 340)];
 
 _Wall _mixedWall() {
-  final wall = _Wall(_w, _h);
+  final wall = SyntheticWall(_w, _h);
   for (final (x, y) in _redHolds) {
-    wall.disc(x, y, 8, _red);
+    wall.disc(x, y, 8, wallRed);
   }
   wall
-    ..disc(150, 40, 8, _blue)
-    ..disc(40, 220, 9, _blue)
-    ..disc(280, 150, 7, _yellow)
-    ..disc(180, 330, 10, _yellow);
+    ..disc(150, 40, 8, wallBlue)
+    ..disc(40, 220, 9, wallBlue)
+    ..disc(280, 150, 7, wallYellow)
+    ..disc(180, 330, 10, wallYellow);
   return wall;
 }
 
@@ -120,13 +61,13 @@ void main() {
     });
 
     test('reads a hold that only covers part of the disc', () {
-      final wall = _Wall(_w, _h)..disc(100, 100, 5, _blue);
+      final wall = SyntheticWall(_w, _h)..disc(100, 100, 5, wallBlue);
       final color = sampleHoldColor(wall.frame, _nx(103), _ny(102))!;
       expect(color.name, 'blue');
     });
 
     test('handles hues on both sides of 0°', () {
-      final wall = _Wall(_w, _h)..disc(100, 100, 8, (230, 30, 50));
+      final wall = SyntheticWall(_w, _h)..disc(100, 100, 8, (230, 30, 50));
       final color = sampleHoldColor(wall.frame, _nx(100), _ny(100))!;
       expect(hueDistance(color.hue, 354), lessThan(3));
       // A pixel at 4.5° is the same color.
@@ -138,7 +79,7 @@ void main() {
     });
 
     test('reads white holds as achromatic', () {
-      final wall = _Wall(_w, _h)..disc(100, 100, 9, _white);
+      final wall = SyntheticWall(_w, _h)..disc(100, 100, 9, wallWhite);
       final color = sampleHoldColor(wall.frame, _nx(100), _ny(100))!;
       expect(color.achromatic, isTrue);
       expect(color.value, greaterThan(0.85));
@@ -146,12 +87,12 @@ void main() {
     });
 
     test('returns null for a patch with no coherent color', () {
-      final wall = _Wall(_w, _h);
+      final wall = SyntheticWall(_w, _h);
       // Every pixel a different saturated hue.
       for (var y = 80; y < 120; y++) {
         for (var x = 80; x < 120; x++) {
           final hue = ((x * 37 + y * 101) % 360).toDouble();
-          wall.set(x, y, _hsvToRgb(hue));
+          wall.set(x, y, saturatedHue(hue));
         }
       }
       expect(sampleHoldColor(wall.frame, _nx(100), _ny(100)), isNull);
@@ -175,7 +116,7 @@ void main() {
     });
 
     test('finds holds on both sides of 0° hue', () {
-      final wall = _Wall(_w, _h)
+      final wall = SyntheticWall(_w, _h)
         ..disc(60, 60, 8, (230, 30, 50)) // ~354°
         ..disc(200, 200, 8, (230, 45, 30)); // ~4.5°
       final frame = wall.frame;
@@ -186,9 +127,9 @@ void main() {
     test('rejects wall panels and streaks of the same color', () {
       final wall = _mixedWall()
         // Big red panel: ~9% of the frame.
-        ..rect(150, 180, 270, 280, _red)
+        ..rect(150, 180, 270, 280, wallRed)
         // Thin diagonal red streak (tape).
-        ..diagonal(100, 240, 150, 4, _red);
+        ..diagonal(100, 240, 150, 4, wallRed);
       final frame = wall.frame;
       final color = sampleHoldColor(frame, _nx(60), _ny(50))!;
       final holds = segmentHolds(frame, color);
@@ -201,10 +142,10 @@ void main() {
     });
 
     test('ignores single-pixel speckle of the target color', () {
-      final wall = _Wall(_w, _h);
+      final wall = SyntheticWall(_w, _h);
       for (var y = 0; y < _h; y += 7) {
         for (var x = 0; x < _w; x += 7) {
-          wall.set(x, y, _red);
+          wall.set(x, y, wallRed);
         }
       }
       const color = HoldColor(hue: 0, saturation: 0.8, value: 0.86);
@@ -212,10 +153,10 @@ void main() {
     });
 
     test('finds white holds without picking up the gray wall', () {
-      final wall = _Wall(_w, _h)
-        ..disc(70, 70, 9, _white)
-        ..disc(220, 150, 9, _white)
-        ..disc(120, 300, 9, _white);
+      final wall = SyntheticWall(_w, _h)
+        ..disc(70, 70, 9, wallWhite)
+        ..disc(220, 150, 9, wallWhite)
+        ..disc(120, 300, 9, wallWhite);
       final frame = wall.frame;
       final color = sampleHoldColor(frame, _nx(70), _ny(70))!;
       expect(color.achromatic, isTrue);
@@ -281,19 +222,4 @@ void main() {
       'black',
     );
   });
-}
-
-_Rgb _hsvToRgb(double hue) {
-  const c = 1.0;
-  final x = c * (1 - ((hue / 60) % 2 - 1).abs());
-  final (r, g, b) = switch (hue ~/ 60) {
-    0 => (c, x, 0.0),
-    1 => (x, c, 0.0),
-    2 => (0.0, c, x),
-    3 => (0.0, x, c),
-    4 => (x, 0.0, c),
-    _ => (c, 0.0, x),
-  };
-  int byte(double v) => (v * 220).round();
-  return (byte(r), byte(g), byte(b));
 }
