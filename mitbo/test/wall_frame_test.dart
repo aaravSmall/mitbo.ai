@@ -98,7 +98,7 @@ void main() {
       180: (8, 4, (7, 3), (0, 0)),
       270: (4, 8, (0, 7), (3, 0)),
     };
-    expectations.forEach((rotation, e) {
+    for (final MapEntry(key: rotation, value: e) in expectations.entries) {
       final (w, h, red, blue) = e;
       test('rotates $rotation° clockwise to upright', () {
         final bytes = _nv21(8, 4, squareInTopLeft);
@@ -115,7 +115,7 @@ void main() {
         }
         expect(redCount, 4);
       });
-    });
+    }
 
     test('downsamples to the target width of the upright image', () {
       final bytes = _nv21(640, 480, (_, _) => (90, 90, 90));

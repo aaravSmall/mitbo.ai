@@ -38,7 +38,7 @@ Geometry/physics engine does the reasoning; the LLM does the narration. Don't as
 
 ## v1 scope (current target)
 
-- Automatic, color-based hold detection: the problem is identified from the color of the start holds the climber's hands settle on (see B above). No manual hold marking, no per-climb setup.
+- Automatic, color-based hold detection: the problem is identified from the color of the start holds the climber's hands settle on (see B above). No manual hold marking, no per-climb setup. **Done in code** (2026-10-04, `hold-detection` branch); not yet run on a device or at the gym.
 - Pose tracking follows the climber live via the phone's back camera. **Done in code** (2026-10-03); real-device and gym testing pending.
 - System generates a static beta and narrates it via TTS *before* the climb starts (no live-adjustment yet).
 
@@ -48,6 +48,30 @@ Geometry/physics engine does the reasoning; the LLM does the narration. Don't as
 - Body proportions input: ask the climber for height/wingspan directly, or estimate from pose landmarks + camera distance?
 - What counts as a "crux" in the geometry model — largest reach-to-limb-length ratio? Worst hold quality combined with reach? (Deferred to v2.)
 - Telling holds apart from wall paint, volumes, and other features of a similar color — size/shape filtering is the v1 answer; a learned hold detector is the v3 answer.
+
+## Hold detection defaults
+
+Starting values, all tunable from the debug sheet or in code (`SegmentationParams`, `ColorTolerance`, `StartDetector`, `WallReferenceTracker`):
+
+- Wall snapshot: 320 px wide (upright), taken after 1 s with nobody detected, refreshed every 5 s while clear.
+- Start: both hands visible, above the hip center (if visible), within 0.025 (normalized) of where they settled for 1.2 s; jumps > 0.15 between frames restart the timer; hands within 0.04 = matched start.
+- Color sample: center-weighted disc of radius 3% of frame width; 36-bin hue histogram, best 3-bin window must hold ≥ 12% of the weight; mostly-unsaturated discs read as achromatic by brightness.
+- Matching: hue within 18°, saturation ≥ 0.25, value ≥ 0.15; achromatic: saturation < 0.25 and brightness within 0.2.
+- Blobs: 3x3 open + close; keep 0.02%–5% of the frame, fill ratio ≥ 0.2, aspect ≤ 8:1.
+- Start holds: hold box (+0.02 margin) under each hand, else nearest within 0.06.
+
+## Gym test checklist
+
+For the first session at the wall with a real phone (debug build, bug icon on, "Show wall reference" on):
+
+- [ ] Phone placement: height and distance where the whole problem plus the climber fit; note what works.
+- [ ] Wall scan: does the pill go from "Step out of frame…" to "Ready" within ~1–2 s of stepping out? Does the thumbnail look right (upright, not mirrored, whole frame)?
+- [ ] Start detection: does it fire within ~1–2 s of settling on the start, and *not* while standing around or chalking up?
+- [ ] Color sampling per hold color: red, orange, yellow, green, blue, purple, pink — and separately white, black, gray. Note which fail and the HSV the debug panel shows.
+- [ ] False positives: volumes, wall paint, tape, other problems' holds of a similar color. Note what the hue-tolerance / min-saturation sliders fix.
+- [ ] Missed holds: small feet/crimps, holds the climber blocked during the scan.
+- [ ] Overlay alignment: do the outlines sit on the holds, on Android and iOS, portrait and landscape?
+- [ ] Performance: pose FPS (debug chip) before vs. during scan/detection.
 
 ## Testing / data
 
@@ -59,3 +83,4 @@ Plan is to test on the builder's own home wall or local gym — this gives a nat
 - 2026-10-03: Platform decided: v1 is a phone app (iOS + Android) using the back camera, propped up hands-free and pointed at the wall — not a laptop webcam app. Docs updated to match. Next step: pose tracking on top of the existing camera preview.
 - 2026-10-03: Pose tracking milestone done in code. ML Kit pose detection (stream mode) runs on the back-camera stream with a skeleton overlay; `ClimberKeypoints` turns each pose into smoothed, normalized hands/feet/hip-center points with confidences for the beta engine. Debug-only tools (debug builds only, compiled out of release): FPS/landmark chip, smoothed-keypoint view, base/accurate model switch, live alpha and hand-nudge sliders. iOS camera permission fixed (Podfile `PERMISSION_CAMERA=1`). Verified on one Android phone (33 landmarks detected); overlay alignment, the keypoints/debug tools, iOS on a real device, and testing at the gym/home wall are still pending. Next: manual hold marking on a captured frame.
 - 2026-10-04: Hold identification decided: v1 is fully automatic and color-based (no manual tapping). Color is sampled from a clean wall reference frame at the start holds; all same-color holds in frame form the problem. Crux identification moved to v2. Docs updated to match.
+- 2026-10-04: Hold detection milestone done in code (on the `hold-detection` branch; not compiled in the workspace that wrote it, so `flutter analyze` / `flutter test` must be run before merging). Pipeline: `FrameGrabber` hands out upright 320 px `WallFrame` snapshots on demand (no per-frame cost otherwise); `WallReferenceTracker` keeps a clean wall snapshot while nobody is in frame; `StartDetector` fires when both hands settle above the hips for 1.2 s; `detectProblem` samples the start-hold color from the snapshot and segments every same-color hold (HSV mask, open/close, connected components, size/shape filters), running in an isolate. `ProblemSession` drives it live; `HoldOverlay` outlines the holds (S = start, T = top) and a status pill shows progress with Reset. Debug: wall reference thumbnail, sampled HSV readout, hue-tolerance/min-saturation sliders. Next: run the gym test checklist above, then the beta engine.
