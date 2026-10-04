@@ -8,9 +8,20 @@ import '../services/pose_service.dart';
 
 /// Small readout of pose detection rate and visible landmark count.
 class PoseDebugChip extends StatefulWidget {
-  const PoseDebugChip({super.key, required this.frames});
+  const PoseDebugChip({
+    super.key,
+    required this.frames,
+    required this.modelName,
+    this.onTap,
+  });
 
   final ValueListenable<PoseFrame?> frames;
+
+  /// Pose model in use, shown first (e.g. "base").
+  final String modelName;
+
+  /// Opens the debug settings.
+  final VoidCallback? onTap;
 
   @override
   State<PoseDebugChip> createState() => _PoseDebugChipState();
@@ -69,16 +80,28 @@ class _PoseDebugChipState extends State<PoseDebugChip> {
     final visible = landmarks
         .where((l) => l.likelihood >= minLandmarkLikelihood)
         .length;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black54,
+    return Material(
+      color: Colors.black54,
+      borderRadius: BorderRadius.circular(6),
+      child: InkWell(
         borderRadius: BorderRadius.circular(6),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        child: Text(
-          '${_recent.length} fps · $visible/${landmarks.length} landmarks',
-          style: const TextStyle(color: Colors.white),
+        onTap: widget.onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${widget.modelName} · ${_recent.length} fps · '
+                '$visible/${landmarks.length}',
+                style: const TextStyle(color: Colors.white),
+              ),
+              if (widget.onTap != null) ...[
+                const SizedBox(width: 6),
+                const Icon(Icons.tune, size: 16, color: Colors.white),
+              ],
+            ],
+          ),
         ),
       ),
     );

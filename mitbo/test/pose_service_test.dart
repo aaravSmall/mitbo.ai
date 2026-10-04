@@ -162,7 +162,7 @@ void main() {
 
     test('drops frames while a detection is in flight', () async {
       final detector = _FakeDetector();
-      final service = PoseService(detector: detector);
+      final service = PoseService(createDetector: (_) => detector);
 
       final first = _process(service, _nv21Frame());
       await _process(service, _nv21Frame());
@@ -178,7 +178,7 @@ void main() {
 
     test('publishes the image size and rotation with the result', () async {
       final detector = _FakeDetector();
-      final service = PoseService(detector: detector);
+      final service = PoseService(createDetector: (_) => detector);
 
       final processing = _process(service, _nv21Frame());
       detector.pending.single.complete([]);
@@ -195,7 +195,7 @@ void main() {
       () async {
         debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
         final detector = _FakeDetector();
-        final service = PoseService(detector: detector);
+        final service = PoseService(createDetector: (_) => detector);
 
         final processing = _process(
           service,
@@ -213,7 +213,7 @@ void main() {
 
     test('publishes smoothed climber keypoints in upright space', () async {
       final detector = _FakeDetector();
-      final service = PoseService(detector: detector);
+      final service = PoseService(createDetector: (_) => detector);
 
       // Raw 4x2 frame rotated 90 degrees is upright 2x4.
       final processing = _process(service, _nv21Frame());
@@ -239,7 +239,7 @@ void main() {
 
     test('publishes no keypoints when nobody is in frame', () async {
       final detector = _FakeDetector();
-      final service = PoseService(detector: detector);
+      final service = PoseService(createDetector: (_) => detector);
 
       final processing = _process(service, _nv21Frame());
       detector.pending.single.complete([]);
@@ -253,7 +253,7 @@ void main() {
 
     test('reset clears the result and drops an in-flight detection', () async {
       final detector = _FakeDetector();
-      final service = PoseService(detector: detector);
+      final service = PoseService(createDetector: (_) => detector);
 
       final first = _process(service, _nv21Frame());
       detector.pending.single.complete([]);
@@ -270,7 +270,7 @@ void main() {
 
     test('dispose closes the detector and ignores late results', () async {
       final detector = _FakeDetector();
-      final service = PoseService(detector: detector);
+      final service = PoseService(createDetector: (_) => detector);
 
       final processing = _process(service, _nv21Frame());
       await service.dispose();
@@ -282,6 +282,153 @@ void main() {
 
       await _process(service, _nv21Frame());
       expect(detector.pending, hasLength(1));
+    });
+  });
+
+  group('setModel', () {
+    setUp(() => debugDefaultTargetPlatformOverride = TargetPlatform.android);
+
+    PoseService serviceWith(Map<PoseDetectionModel, _FakeDetector> created) =>
+        PoseService(
+          createDetector: (model) => created[model] = _FakeDetector(),
+        );
+
+    Pose wristAt(double x, double y) => Pose(
+      landmarks: {
+        PoseLandmarkType.leftWrist: PoseLandmark(
+          type: PoseLandmarkType.leftWrist,
+          x: x,
+          y: y,
+          z: 0,
+          likelihood: 0.9,
+        ),
+      },
+    );
+
+    test(
+      'closes the old detector and sends new frames to the new one',
+      () async {
+        final created = <PoseDetectionModel, _FakeDetector>{};
+        final service = serviceWith(created);
+        expect(service.model, PoseDetectionModel.base);
+
+        await service.setModel(PoseDetectionModel.accurate);
+
+        expect(service.model, PoseDetectionModel.accurate);
+        expect(created[PoseDetectionModel.base]!.closed, isTrue);
+        expect(created[PoseDetectionModel.accurate]!.closed, isFalse);
+
+        final processing = _process(service, _nv21Frame());
+        expect(created[PoseDetectionModel.base]!.pending, isEmpty);
+        expect(created[PoseDetectionModel.accurate]!.pending, hasLength(1));
+        created[PoseDetectionModel.accurate]!.pending.single.complete([
+          wristAt(1, 1),
+        ]);
+        await processing;
+        expect(service.latest.value!.keypoints.leftHand, isNotNull);
+      },
+    );
+
+    test('ignores a late result from the old detector and closes it only '
+        'after that detection finishes', () async {
+      final created = <PoseDetectionModel, _FakeDetector>{};
+      final service = serviceWith(created);
+      final base = created[PoseDetectionModel.base]!;
+
+      final oldDetection = _process(service, _nv21Frame());
+      final switching = service.setModel(PoseDetectionModel.accurate);
+      await Future<void>.delayed(Duration.zero);
+      expect(base.closed, isFalse, reason: 'still running a detection');
+
+      // The new detector takes frames right away, without waiting.
+      final newDetection = _process(service, _nv21Frame());
+      final accurate = created[PoseDetectionModel.accurate]!;
+      expect(accurate.pending, hasLength(1));
+
+      base.pending.single.complete([wristAt(1, 1)]);
+      await oldDetection;
+      await switching;
+      expect(base.closed, isTrue);
+      expect(service.latest.value, isNull);
+
+      accurate.pending.single.complete([]);
+      await newDetection;
+      expect(service.latest.value, isNotNull);
+      expect(service.latest.value!.pose, isNull);
+    });
+
+    test('still closes the old detector if its last detection fails', () async {
+      final created = <PoseDetectionModel, _FakeDetector>{};
+      final service = serviceWith(created);
+      final base = created[PoseDetectionModel.base]!;
+
+      final oldDetection = _process(service, _nv21Frame());
+      final switching = service.setModel(PoseDetectionModel.accurate);
+      base.pending.single.completeError(StateError('detector closed'));
+      await oldDetection;
+      await switching;
+
+      expect(base.closed, isTrue);
+      expect(service.latest.value, isNull);
+    });
+
+    test('switching to the current model does nothing', () async {
+      final created = <PoseDetectionModel, _FakeDetector>{};
+      final service = serviceWith(created);
+
+      await service.setModel(PoseDetectionModel.base);
+
+      expect(created, hasLength(1));
+      expect(created[PoseDetectionModel.base]!.closed, isFalse);
+    });
+
+    test('does nothing after dispose', () async {
+      final created = <PoseDetectionModel, _FakeDetector>{};
+      final service = serviceWith(created);
+      await service.dispose();
+
+      await service.setModel(PoseDetectionModel.accurate);
+
+      expect(created.keys, [PoseDetectionModel.base]);
+    });
+  });
+
+  group('tuning', () {
+    setUp(() => debugDefaultTargetPlatformOverride = TargetPlatform.android);
+
+    test('handNudge is applied to published hands', () async {
+      final detector = _FakeDetector();
+      final service = PoseService(createDetector: (_) => detector)
+        ..handNudge = 1;
+
+      final processing = _process(service, _nv21Frame());
+      // Upright 2x4: wrist (0, 0), knuckle midpoint (2, 2).
+      detector.pending.single.complete([
+        Pose(
+          landmarks: {
+            for (final (type, x, y) in [
+              (PoseLandmarkType.leftWrist, 0.0, 0.0),
+              (PoseLandmarkType.leftIndex, 2.0, 0.0),
+              (PoseLandmarkType.leftPinky, 2.0, 4.0),
+            ])
+              type: PoseLandmark(type: type, x: x, y: y, z: 0, likelihood: 0.9),
+          },
+        ),
+      ]);
+      await processing;
+
+      expect(
+        service.latest.value!.keypoints.leftHand,
+        const Keypoint(1, 0.5, 0.9),
+      );
+    });
+
+    test('alpha is passed to the smoother and validated', () {
+      final service = PoseService(createDetector: (_) => _FakeDetector());
+      service.alpha = 0.2;
+      expect(service.alpha, 0.2);
+      expect(() => service.alpha = 0, throwsArgumentError);
+      expect(() => service.alpha = 1.5, throwsArgumentError);
     });
   });
 }

@@ -1,10 +1,12 @@
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../services/pose_service.dart';
 import '../widgets/pose_debug_chip.dart';
+import '../widgets/pose_debug_sheet.dart';
 import '../widgets/pose_overlay.dart';
 
 enum _CameraStatus {
@@ -21,8 +23,8 @@ enum _CameraStatus {
 /// Shows a live back-camera preview once camera permission is granted, and
 /// runs pose tracking on the camera's image stream.
 ///
-/// Draws the detected skeleton over the preview, with an optional debug
-/// readout toggled from the app bar.
+/// Draws the detected skeleton over the preview. Debug builds add a bug icon
+/// in the app bar for a pose readout and live tuning.
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
 
@@ -45,7 +47,9 @@ class _CameraScreenState extends State<CameraScreen>
   // so it should be restarted on resume.
   bool _suspended = false;
 
+  // Debug builds only (the toggle is hidden otherwise).
   bool _showPoseDebug = false;
+  PoseDebugSettings _debugSettings = const PoseDebugSettings();
 
   @override
   void initState() {
@@ -223,19 +227,31 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  void _applyDebugSettings(PoseDebugSettings settings) {
+    if (!mounted) return;
+    if (settings.model != _poseService.model) {
+      _poseService.setModel(settings.model);
+    }
+    _poseService
+      ..alpha = settings.alpha
+      ..handNudge = settings.handNudge;
+    setState(() => _debugSettings = settings);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Camera'),
         actions: [
-          IconButton(
-            icon: Icon(
-              _showPoseDebug ? Icons.bug_report : Icons.bug_report_outlined,
+          if (kDebugMode)
+            IconButton(
+              icon: Icon(
+                _showPoseDebug ? Icons.bug_report : Icons.bug_report_outlined,
+              ),
+              tooltip: _showPoseDebug ? 'Hide pose debug' : 'Show pose debug',
+              onPressed: () => setState(() => _showPoseDebug = !_showPoseDebug),
             ),
-            tooltip: _showPoseDebug ? 'Hide pose debug' : 'Show pose debug',
-            onPressed: () => setState(() => _showPoseDebug = !_showPoseDebug),
-          ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Edit profile',
@@ -303,14 +319,25 @@ class _CameraScreenState extends State<CameraScreen>
             Center(
               child: CameraPreview(
                 controller,
-                child: PoseOverlay(frames: _poseService.latest),
+                child: PoseOverlay(
+                  frames: _poseService.latest,
+                  showKeypoints: _showPoseDebug && _debugSettings.showKeypoints,
+                ),
               ),
             ),
             if (_showPoseDebug)
               Positioned(
                 left: 12,
                 top: 12,
-                child: PoseDebugChip(frames: _poseService.latest),
+                child: PoseDebugChip(
+                  frames: _poseService.latest,
+                  modelName: _poseService.model.name,
+                  onTap: () => showPoseDebugSheet(
+                    context,
+                    settings: _debugSettings,
+                    onChanged: _applyDebugSettings,
+                  ),
+                ),
               ),
           ],
         );

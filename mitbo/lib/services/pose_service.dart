@@ -32,31 +32,53 @@ class PoseFrame {
   final ClimberKeypoints keypoints;
 }
 
-/// Runs ML Kit pose detection (stream mode, base model) on camera frames.
+/// Creates the detector for [model]; injectable for tests.
+typedef PoseDetectorFactory = PoseDetector Function(PoseDetectionModel model);
+
+PoseDetector _createDetector(PoseDetectionModel model) => PoseDetector(
+  options: PoseDetectorOptions(model: model, mode: PoseDetectionMode.stream),
+);
+
+/// Runs ML Kit pose detection (stream mode) on camera frames.
 ///
 /// Owns the [PoseDetector]. Frames that arrive while a detection is still
 /// in flight are dropped, so a slow detector never backs up the camera.
 class PoseService {
-  PoseService({PoseDetector? detector, KeypointSmoother? smoother})
-    : _smoother = smoother ?? KeypointSmoother(),
-      _detector =
-          detector ??
-          PoseDetector(
-            options: PoseDetectorOptions(
-              model: PoseDetectionModel.base,
-              mode: PoseDetectionMode.stream,
-            ),
-          );
+  PoseService({
+    PoseDetectionModel model = PoseDetectionModel.base,
+    PoseDetectorFactory createDetector = _createDetector,
+    KeypointSmoother? smoother,
+  }) : _model = model,
+       _createDetectorFor = createDetector,
+       _detector = createDetector(model),
+       _smoother = smoother ?? KeypointSmoother();
 
-  final PoseDetector _detector;
+  final PoseDetectorFactory _createDetectorFor;
+  PoseDetectionModel _model;
+  PoseDetector _detector;
   final KeypointSmoother _smoother;
   final ValueNotifier<PoseFrame?> latest = ValueNotifier(null);
+
+  /// How far hands are moved from the wrist toward the knuckles (0–1).
+  /// See [ClimberKeypoints.fromPose].
+  double handNudge = 0.5;
 
   bool _busy = false;
   bool _disposed = false;
 
+  // The detection currently running, so a model switch can wait for it
+  // before closing the detector it's running on.
+  Future<void>? _inFlight;
+
   // Bumped by [reset] so a detection already in flight is discarded.
   int _session = 0;
+
+  /// The pose model currently in use.
+  PoseDetectionModel get model => _model;
+
+  /// Smoothing weight of the newest frame; see [KeypointSmoother.alpha].
+  double get alpha => _smoother.alpha;
+  set alpha(double value) => _smoother.alpha = value;
 
   /// Image format ML Kit expects from the camera stream on this platform.
   static ImageFormatGroup get imageFormatGroup =>
@@ -131,8 +153,10 @@ class PoseService {
 
     _busy = true;
     final session = _session;
+    final detection = _detector.processImage(inputImage);
+    _inFlight = detection;
     try {
-      final poses = await _detector.processImage(inputImage);
+      final poses = await detection;
       if (_disposed || session != _session) return;
       final pose = poses.isEmpty ? null : poses.first;
       final imageSize = Size(image.width.toDouble(), image.height.toDouble());
@@ -148,6 +172,7 @@ class PoseService {
               imageWidth: imageSize.width,
               imageHeight: imageSize.height,
               rotation: coordinateRotation,
+              handNudge: handNudge,
             );
       latest.value = PoseFrame(
         pose: pose,
@@ -156,10 +181,36 @@ class PoseService {
         keypoints: _smoother.smooth(raw),
       );
     } catch (e) {
-      debugPrint('Pose detection failed: $e');
+      if (session == _session) debugPrint('Pose detection failed: $e');
     } finally {
-      _busy = false;
+      // After a model switch the busy flag belongs to the new detector.
+      if (identical(_inFlight, detection)) {
+        _inFlight = null;
+        _busy = false;
+      }
     }
+  }
+
+  /// Switches to the [model] pose model.
+  ///
+  /// The new detector takes the next frame. The old one is closed once any
+  /// detection still running on it finishes, and that result is discarded.
+  Future<void> setModel(PoseDetectionModel model) async {
+    if (_disposed || model == _model) return;
+    final oldDetector = _detector;
+    final oldDetection = _inFlight;
+    _model = model;
+    _detector = _createDetectorFor(model);
+    // Nothing is running on the new detector yet.
+    _busy = false;
+    _inFlight = null;
+    reset();
+    try {
+      await oldDetection;
+    } catch (_) {
+      // Its result is being discarded anyway.
+    }
+    await oldDetector.close();
   }
 
   /// Clears the latest result and smoothing history, and discards any

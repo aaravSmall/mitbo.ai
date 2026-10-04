@@ -162,13 +162,22 @@ class ClimberKeypoints {
 /// Smooths keypoints across frames with a per-point exponential moving
 /// average, so jitter in ML Kit's output doesn't reach the beta engine.
 class KeypointSmoother {
-  KeypointSmoother({this.alpha = 0.5, this.maxMissingFrames = 5})
-    : assert(alpha > 0 && alpha <= 1),
-      assert(maxMissingFrames >= 0);
+  KeypointSmoother({double alpha = 0.5, this.maxMissingFrames = 5})
+    : assert(maxMissingFrames >= 0) {
+    this.alpha = alpha;
+  }
 
   /// Weight of the newest frame: 1 = no smoothing, closer to 0 = smoother
-  /// but laggier.
-  final double alpha;
+  /// but laggier. Must be in (0, 1].
+  double get alpha => _alpha;
+  set alpha(double value) {
+    if (!(value > 0 && value <= 1)) {
+      throw ArgumentError.value(value, 'alpha', 'must be in (0, 1]');
+    }
+    _alpha = value;
+  }
+
+  late double _alpha;
 
   /// A point missing for more than this many consecutive frames starts
   /// fresh when it reappears, instead of easing in from where it was.
