@@ -189,6 +189,27 @@ void main() {
       expect(frame.rotation, InputImageRotation.rotation90deg);
     });
 
+    test(
+      'publishes a 0 degree rotation on iOS, where frames are upright',
+      () async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+        final detector = _FakeDetector();
+        final service = PoseService(detector: detector);
+
+        final processing = _process(
+          service,
+          _frame(
+            group: ImageFormatGroup.bgra8888,
+            raw: InputImageFormat.bgra8888.rawValue,
+          ),
+        );
+        detector.pending.single.complete([]);
+        await processing;
+
+        expect(service.latest.value!.rotation, InputImageRotation.rotation0deg);
+      },
+    );
+
     test('dispose closes the detector and ignores late results', () async {
       final detector = _FakeDetector();
       final service = PoseService(detector: detector);

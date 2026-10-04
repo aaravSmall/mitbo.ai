@@ -110,4 +110,21 @@ void main() {
       expect(prefs.getDouble('profile_height_cm'), 190.0);
     },
   );
+
+  testWidgets('pose debug readout toggle is off by default and flips', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'profile_height_cm': 180.0,
+      'profile_wingspan_cm': 182.0,
+    });
+
+    await tester.pumpWidget(MitboApp());
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Show pose debug'), findsOneWidget);
+    await tester.tap(find.byTooltip('Show pose debug'));
+    await tester.pump();
+    expect(find.byTooltip('Hide pose debug'), findsOneWidget);
+  });
 }

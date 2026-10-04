@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../services/pose_service.dart';
+import '../widgets/pose_debug_chip.dart';
+import '../widgets/pose_overlay.dart';
 
 enum _CameraStatus {
   checking,
@@ -19,7 +21,8 @@ enum _CameraStatus {
 /// Shows a live back-camera preview once camera permission is granted, and
 /// runs pose tracking on the camera's image stream.
 ///
-/// No overlay drawing yet — only a debug readout of the landmark count.
+/// Draws the detected skeleton over the preview, with an optional debug
+/// readout toggled from the app bar.
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
 
@@ -41,6 +44,8 @@ class _CameraScreenState extends State<CameraScreen>
   // True when the camera was torn down because the app was backgrounded,
   // so it should be restarted on resume.
   bool _suspended = false;
+
+  bool _showPoseDebug = false;
 
   @override
   void initState() {
@@ -223,6 +228,13 @@ class _CameraScreenState extends State<CameraScreen>
         title: const Text('Camera'),
         actions: [
           IconButton(
+            icon: Icon(
+              _showPoseDebug ? Icons.bug_report : Icons.bug_report_outlined,
+            ),
+            tooltip: _showPoseDebug ? 'Hide pose debug' : 'Show pose debug',
+            onPressed: () => setState(() => _showPoseDebug = !_showPoseDebug),
+          ),
+          IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Edit profile',
             onPressed: () => context.push('/edit-profile'),
@@ -283,36 +295,21 @@ class _CameraScreenState extends State<CameraScreen>
         }
         return Stack(
           children: [
+            // CameraPreview sizes itself to the preview's aspect ratio for
+            // the current orientation; the overlay is its child so it covers
+            // exactly the same area.
             Center(
-              child: AspectRatio(
-                aspectRatio: controller.value.aspectRatio,
-                child: CameraPreview(controller),
+              child: CameraPreview(
+                controller,
+                child: PoseOverlay(frames: _poseService.latest),
               ),
             ),
-            // Temporary debug readout until the skeleton overlay lands.
-            Positioned(
-              left: 12,
-              top: 12,
-              child: ValueListenableBuilder<PoseFrame?>(
-                valueListenable: _poseService.latest,
-                builder: (context, frame, _) => DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    child: Text(
-                      'Landmarks: ${frame?.pose?.landmarks.length ?? 0}',
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ),
-                ),
+            if (_showPoseDebug)
+              Positioned(
+                left: 12,
+                top: 12,
+                child: PoseDebugChip(frames: _poseService.latest),
               ),
-            ),
           ],
         );
     }

@@ -19,7 +19,9 @@ class PoseFrame {
   /// Size of the raw camera image, before [rotation] is applied.
   final Size imageSize;
 
-  /// Rotation ML Kit applied to the image to make it upright.
+  /// Rotation from [imageSize] to the upright space the landmark
+  /// coordinates are in. Always 0° on iOS, where the camera plugin already
+  /// delivers upright frames.
   final InputImageRotation rotation;
 }
 
@@ -122,7 +124,11 @@ class PoseService {
       latest.value = PoseFrame(
         pose: poses.isEmpty ? null : poses.first,
         imageSize: Size(image.width.toDouble(), image.height.toDouble()),
-        rotation: rotation,
+        // ML Kit ignores the rotation on iOS (frames already arrive
+        // upright), so its coordinates are in the raw image's space there.
+        rotation: defaultTargetPlatform == TargetPlatform.iOS
+            ? InputImageRotation.rotation0deg
+            : rotation,
       );
     } catch (e) {
       debugPrint('Pose detection failed: $e');
