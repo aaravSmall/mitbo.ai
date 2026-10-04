@@ -9,7 +9,7 @@ A phone app (iOS + Android): prop the phone up hands-free with the back camera p
 ## Core technical pieces
 
 **A. Human/pose tracking**
-Track hands, feet, hips, and other joints in real time from the phone's back-camera video. Considered solved / off-the-shelf — plan to use MediaPipe Pose (BlazePose) rather than building this from scratch.
+Track hands, feet, hips, and other joints in real time from the phone's back-camera video. Considered solved / off-the-shelf. Implemented with Google ML Kit pose detection (BlazePose-based, 33 landmarks) via `google_mlkit_pose_detection`, rather than building this from scratch. Raw landmarks are reduced to the points the beta engine needs — left/right hand, left/right foot, hip center — normalized to 0–1 and smoothed per point (`ClimberKeypoints` / `KeypointSmoother`).
 
 **B. Problem/hold identification**
 The hard part. Need to (1) detect holds on the wall via a vision model, and (2) figure out which holds belong to "this" problem — either via hold color, or by watching which holds the climber actually touches. Gyms don't reliably color-tag holds in a way that's easy to parse from a single frame, so auto-detection is deferred (see v1 scope below).
@@ -27,7 +27,7 @@ Geometry/physics engine does the reasoning; the LLM does the narration. Don't as
 ## v1 scope (current target)
 
 - User manually outlines/taps the holds for their problem on a captured frame (no auto route detection yet).
-- Pose tracking follows the climber live via the phone's back camera.
+- Pose tracking follows the climber live via the phone's back camera. **Done in code** (2026-10-03); real-device and gym testing pending.
 - System generates a static beta and narrates it via TTS *before* the climb starts (no live-adjustment yet).
 
 ## Open questions / decisions to revisit
@@ -44,3 +44,4 @@ Plan is to test on the builder's own home wall or local gym — this gives a nat
 
 - 2026-09-11: Repo created, initial plan captured (v1–v3 roadmap, geometry-does-reasoning / LLM-does-narration design principle established).
 - 2026-10-03: Platform decided: v1 is a phone app (iOS + Android) using the back camera, propped up hands-free and pointed at the wall — not a laptop webcam app. Docs updated to match. Next step: pose tracking on top of the existing camera preview.
+- 2026-10-03: Pose tracking milestone done in code. ML Kit pose detection (stream mode) runs on the back-camera stream with a skeleton overlay; `ClimberKeypoints` turns each pose into smoothed, normalized hands/feet/hip-center points with confidences for the beta engine. Debug-only tools (debug builds only, compiled out of release): FPS/landmark chip, smoothed-keypoint view, base/accurate model switch, live alpha and hand-nudge sliders. iOS camera permission fixed (Podfile `PERMISSION_CAMERA=1`). Verified on one Android phone (33 landmarks detected); overlay alignment, the keypoints/debug tools, iOS on a real device, and testing at the gym/home wall are still pending. Next: manual hold marking on a captured frame.

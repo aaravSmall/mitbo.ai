@@ -59,6 +59,11 @@ class _FakeDetector extends Fake implements PoseDetector {
   Future<void> close() async => closed = true;
 }
 
+class _ThrowingCloseDetector extends _FakeDetector {
+  @override
+  Future<void> close() async => throw StateError('close failed');
+}
+
 Future<void> _process(PoseService service, CameraImage image) =>
     service.processCameraImage(
       image,
@@ -268,20 +273,31 @@ void main() {
       expect(service.latest.value, isNull);
     });
 
-    test('dispose closes the detector and ignores late results', () async {
+    test('dispose closes the detector once the running detection ends, '
+        'and ignores its result', () async {
       final detector = _FakeDetector();
       final service = PoseService(createDetector: (_) => detector);
 
       final processing = _process(service, _nv21Frame());
-      await service.dispose();
-      expect(detector.closed, isTrue);
+      final disposing = service.dispose();
+      await Future<void>.delayed(Duration.zero);
+      expect(detector.closed, isFalse, reason: 'still running a detection');
 
       // Completing after dispose must not touch the disposed notifier.
       detector.pending.single.complete([]);
       await processing;
+      await disposing;
+      expect(detector.closed, isTrue);
 
       await _process(service, _nv21Frame());
       expect(detector.pending, hasLength(1));
+    });
+
+    test('dispose with nothing running closes the detector', () async {
+      final detector = _FakeDetector();
+      final service = PoseService(createDetector: (_) => detector);
+      await service.dispose();
+      expect(detector.closed, isTrue);
     });
   });
 
@@ -370,6 +386,19 @@ void main() {
 
       expect(base.closed, isTrue);
       expect(service.latest.value, isNull);
+    });
+
+    test('a failure closing the old detector does not escape', () async {
+      final service = PoseService(
+        createDetector: (model) => model == PoseDetectionModel.base
+            ? _ThrowingCloseDetector()
+            : _FakeDetector(),
+      );
+      await expectLater(
+        service.setModel(PoseDetectionModel.accurate),
+        completes,
+      );
+      expect(service.model, PoseDetectionModel.accurate);
     });
 
     test('switching to the current model does nothing', () async {

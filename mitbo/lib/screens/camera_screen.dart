@@ -321,11 +321,15 @@ class _CameraScreenState extends State<CameraScreen>
                 controller,
                 child: PoseOverlay(
                   frames: _poseService.latest,
-                  showKeypoints: _showPoseDebug && _debugSettings.showKeypoints,
+                  showKeypoints:
+                      kDebugMode &&
+                      _showPoseDebug &&
+                      _debugSettings.showKeypoints,
                 ),
               ),
             ),
-            if (_showPoseDebug)
+            // kDebugMode first so release builds compile the chip out.
+            if (kDebugMode && _showPoseDebug)
               Positioned(
                 left: 12,
                 top: 12,

@@ -5,7 +5,7 @@ Version roadmap for mitbo.ai, roughly in order of increasing difficulty. Each ve
 ## v1 — Manual holds, static beta (MVP)
 
 - User captures a photo of the wall and manually taps/outlines the holds that make up their problem (no auto route detection).
-- Pose tracking (MediaPipe/BlazePose) follows the climber live via the phone's back camera (phone propped up hands-free, pointed at the wall).
+- ✅ **Done (2026-10-03):** Pose tracking (ML Kit pose detection, BlazePose-based) follows the climber live via the phone's back camera (phone propped up hands-free, pointed at the wall), producing smoothed hand/foot/hip keypoints for the beta engine. Real-device/gym validation still pending.
 - System generates a beta sequence from hold geometry + climber height/reach, and narrates it via TTS **before** the climb starts.
 - No live adjustment — the beta is generated once, spoken once.
 

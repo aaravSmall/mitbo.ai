@@ -205,12 +205,26 @@ class PoseService {
     _busy = false;
     _inFlight = null;
     reset();
+    await _closeAfter(oldDetector, oldDetection);
+  }
+
+  /// Closes [detector] once [detection] (if any) has finished, so a
+  /// detector is never closed mid-call. Callers don't await this, so
+  /// errors are logged rather than thrown.
+  static Future<void> _closeAfter(
+    PoseDetector detector,
+    Future<void>? detection,
+  ) async {
     try {
-      await oldDetection;
+      await detection;
     } catch (_) {
       // Its result is being discarded anyway.
     }
-    await oldDetector.close();
+    try {
+      await detector.close();
+    } catch (e) {
+      debugPrint('Failed to close pose detector: $e');
+    }
   }
 
   /// Clears the latest result and smoothing history, and discards any
@@ -227,6 +241,6 @@ class PoseService {
     if (_disposed) return;
     _disposed = true;
     latest.dispose();
-    await _detector.close();
+    await _closeAfter(_detector, _inFlight);
   }
 }
