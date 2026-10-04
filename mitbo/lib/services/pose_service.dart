@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
+import '../models/climber_keypoints.dart';
+
 /// The most recent pose detection result, plus what's needed to map its
 /// landmark coordinates (which are in source-image space) onto the preview.
 @immutable
@@ -11,6 +13,7 @@ class PoseFrame {
     required this.pose,
     required this.imageSize,
     required this.rotation,
+    required this.keypoints,
   });
 
   /// The detected pose, or null if no one was found in the frame.
@@ -23,6 +26,10 @@ class PoseFrame {
   /// coordinates are in. Always 0° on iOS, where the camera plugin already
   /// delivers upright frames.
   final InputImageRotation rotation;
+
+  /// Smoothed hands, feet and hip center derived from [pose]
+  /// ([ClimberKeypoints.none] when no one is in frame).
+  final ClimberKeypoints keypoints;
 }
 
 /// Runs ML Kit pose detection (stream mode, base model) on camera frames.
@@ -30,8 +37,9 @@ class PoseFrame {
 /// Owns the [PoseDetector]. Frames that arrive while a detection is still
 /// in flight are dropped, so a slow detector never backs up the camera.
 class PoseService {
-  PoseService({PoseDetector? detector})
-    : _detector =
+  PoseService({PoseDetector? detector, KeypointSmoother? smoother})
+    : _smoother = smoother ?? KeypointSmoother(),
+      _detector =
           detector ??
           PoseDetector(
             options: PoseDetectorOptions(
@@ -41,10 +49,14 @@ class PoseService {
           );
 
   final PoseDetector _detector;
+  final KeypointSmoother _smoother;
   final ValueNotifier<PoseFrame?> latest = ValueNotifier(null);
 
   bool _busy = false;
   bool _disposed = false;
+
+  // Bumped by [reset] so a detection already in flight is discarded.
+  int _session = 0;
 
   /// Image format ML Kit expects from the camera stream on this platform.
   static ImageFormatGroup get imageFormatGroup =>
@@ -118,23 +130,45 @@ class PoseService {
     if (inputImage == null) return;
 
     _busy = true;
+    final session = _session;
     try {
       final poses = await _detector.processImage(inputImage);
-      if (_disposed) return;
+      if (_disposed || session != _session) return;
+      final pose = poses.isEmpty ? null : poses.first;
+      final imageSize = Size(image.width.toDouble(), image.height.toDouble());
+      // ML Kit ignores the rotation on iOS (frames already arrive upright),
+      // so its coordinates are in the raw image's space there.
+      final coordinateRotation = defaultTargetPlatform == TargetPlatform.iOS
+          ? InputImageRotation.rotation0deg
+          : rotation;
+      final raw = pose == null
+          ? ClimberKeypoints.none
+          : ClimberKeypoints.fromPose(
+              pose,
+              imageWidth: imageSize.width,
+              imageHeight: imageSize.height,
+              rotation: coordinateRotation,
+            );
       latest.value = PoseFrame(
-        pose: poses.isEmpty ? null : poses.first,
-        imageSize: Size(image.width.toDouble(), image.height.toDouble()),
-        // ML Kit ignores the rotation on iOS (frames already arrive
-        // upright), so its coordinates are in the raw image's space there.
-        rotation: defaultTargetPlatform == TargetPlatform.iOS
-            ? InputImageRotation.rotation0deg
-            : rotation,
+        pose: pose,
+        imageSize: imageSize,
+        rotation: coordinateRotation,
+        keypoints: _smoother.smooth(raw),
       );
     } catch (e) {
       debugPrint('Pose detection failed: $e');
     } finally {
       _busy = false;
     }
+  }
+
+  /// Clears the latest result and smoothing history, and discards any
+  /// detection still in flight. Call when the camera (re)starts.
+  void reset() {
+    if (_disposed) return;
+    _session++;
+    _smoother.reset();
+    latest.value = null;
   }
 
   /// Closes the detector. Stop the camera image stream before calling this.

@@ -1,8 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../models/climber_keypoints.dart';
 import '../services/pose_service.dart';
-import 'pose_overlay.dart';
 
 /// Small readout of pose detection rate and visible landmark count.
 class PoseDebugChip extends StatefulWidget {
@@ -19,10 +21,19 @@ class _PoseDebugChipState extends State<PoseDebugChip> {
   final _recent = <Duration>[];
   final _clock = Stopwatch()..start();
 
+  // Ages out old detections even when no new ones arrive, so the rate
+  // falls to 0 about a second after detection stops.
+  late final Timer _pruneTimer;
+
   @override
   void initState() {
     super.initState();
     widget.frames.addListener(_onFrame);
+    _pruneTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      final before = _recent.length;
+      _prune();
+      if (_recent.length != before) setState(() {});
+    });
   }
 
   @override
@@ -36,16 +47,20 @@ class _PoseDebugChipState extends State<PoseDebugChip> {
 
   @override
   void dispose() {
+    _pruneTimer.cancel();
     widget.frames.removeListener(_onFrame);
     super.dispose();
   }
 
   void _onFrame() {
-    final now = _clock.elapsed;
-    _recent
-      ..add(now)
-      ..removeWhere((t) => now - t > const Duration(seconds: 1));
+    _recent.add(_clock.elapsed);
+    _prune();
     setState(() {});
+  }
+
+  void _prune() {
+    final now = _clock.elapsed;
+    _recent.removeWhere((t) => now - t > const Duration(seconds: 1));
   }
 
   @override

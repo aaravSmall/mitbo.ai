@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
+import 'package:mitbo/models/climber_keypoints.dart';
 import 'package:mitbo/services/pose_service.dart';
 
 const _backCamera = CameraDescription(
@@ -209,6 +210,63 @@ void main() {
         expect(service.latest.value!.rotation, InputImageRotation.rotation0deg);
       },
     );
+
+    test('publishes smoothed climber keypoints in upright space', () async {
+      final detector = _FakeDetector();
+      final service = PoseService(detector: detector);
+
+      // Raw 4x2 frame rotated 90 degrees is upright 2x4.
+      final processing = _process(service, _nv21Frame());
+      detector.pending.single.complete([
+        Pose(
+          landmarks: {
+            PoseLandmarkType.leftWrist: PoseLandmark(
+              type: PoseLandmarkType.leftWrist,
+              x: 1,
+              y: 1,
+              z: 0,
+              likelihood: 0.9,
+            ),
+          },
+        ),
+      ]);
+      await processing;
+
+      final keypoints = service.latest.value!.keypoints;
+      expect(keypoints.leftHand, const Keypoint(0.5, 0.25, 0.9));
+      expect(keypoints.hipCenter, isNull);
+    });
+
+    test('publishes no keypoints when nobody is in frame', () async {
+      final detector = _FakeDetector();
+      final service = PoseService(detector: detector);
+
+      final processing = _process(service, _nv21Frame());
+      detector.pending.single.complete([]);
+      await processing;
+
+      final keypoints = service.latest.value!.keypoints;
+      for (final point in ClimberPoint.values) {
+        expect(keypoints[point], isNull);
+      }
+    });
+
+    test('reset clears the result and drops an in-flight detection', () async {
+      final detector = _FakeDetector();
+      final service = PoseService(detector: detector);
+
+      final first = _process(service, _nv21Frame());
+      detector.pending.single.complete([]);
+      await first;
+      expect(service.latest.value, isNotNull);
+
+      final inFlight = _process(service, _nv21Frame());
+      service.reset();
+      expect(service.latest.value, isNull);
+      detector.pending.last.complete([]);
+      await inFlight;
+      expect(service.latest.value, isNull);
+    });
 
     test('dispose closes the detector and ignores late results', () async {
       final detector = _FakeDetector();

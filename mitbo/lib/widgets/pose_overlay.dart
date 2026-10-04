@@ -2,11 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
+import '../models/climber_keypoints.dart';
 import '../services/pose_service.dart';
 import 'pose_mapping.dart';
-
-/// Landmarks ML Kit is less sure than this are actually in frame are hidden.
-const minLandmarkLikelihood = 0.5;
 
 /// Draws the latest detected pose as a skeleton over the camera preview.
 ///

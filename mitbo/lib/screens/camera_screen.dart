@@ -162,6 +162,8 @@ class _CameraScreenState extends State<CameraScreen>
     // The retry flow can land here with a camera still running.
     await _stopCamera();
     if (!mounted) return;
+    // Don't let the last pose or its smoothing carry over into a new session.
+    _poseService.reset();
     final generation = _cameraGeneration;
     bool superseded() => !mounted || generation != _cameraGeneration;
 
