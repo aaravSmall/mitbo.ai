@@ -4,7 +4,7 @@ mitbo is a bouldering beta assistant: point your phone's camera at a climbing wa
 
 ## Status
 
-Flutter app targeting iOS and Android. It currently has one-time height/wingspan onboarding (saved on the device), go_router navigation, a live back-camera preview with full permission handling, and live pose tracking (ML Kit) with a skeleton overlay and smoothed hand/foot/hip keypoints for the beta engine. Debug builds add a pose debug chip and tuning sheet via the bug icon. Hold marking, beta generation, and text-to-speech aren't built yet — see the root [../CONTEXT.md](../CONTEXT.md) and [../FUTURE_PLANS.md](../FUTURE_PLANS.md) for the product plan and roadmap.
+Flutter app targeting iOS and Android. It currently has one-time height/wingspan onboarding (saved on the device), go_router navigation, a live back-camera preview with full permission handling, and live pose tracking (ML Kit) with a skeleton overlay and smoothed hand/foot/hip keypoints for the beta engine. Debug builds add a pose debug chip and tuning sheet via the bug icon. Automatic color-based hold detection is the current milestone; beta generation and text-to-speech aren't built yet — see the root [../CONTEXT.md](../CONTEXT.md) and [../FUTURE_PLANS.md](../FUTURE_PLANS.md) for the product plan and roadmap.
 
 ## Project layout
 
