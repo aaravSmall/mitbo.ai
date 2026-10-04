@@ -10,6 +10,8 @@ class StartPosition {
     required this.rightHand,
     this.leftFoot,
     this.rightFoot,
+    this.hipCenter,
+    this.shoulderCenter,
     this.matchedDistance = 0.04,
   });
 
@@ -17,6 +19,10 @@ class StartPosition {
   final Keypoint rightHand;
   final Keypoint? leftFoot;
   final Keypoint? rightFoot;
+
+  /// Body points at the start, used by the beta planner for scale.
+  final Keypoint? hipCenter;
+  final Keypoint? shoulderCenter;
 
   /// Hands closer than this are on one shared start hold.
   final double matchedDistance;
@@ -133,6 +139,8 @@ class StartDetector {
       rightHand: right,
       leftFoot: keypoints.leftFoot,
       rightFoot: keypoints.rightFoot,
+      hipCenter: keypoints.hipCenter,
+      shoulderCenter: keypoints.shoulderCenter,
       matchedDistance: matchedDistance,
     );
   }

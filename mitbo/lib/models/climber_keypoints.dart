@@ -32,7 +32,14 @@ class Keypoint {
 }
 
 /// The points the beta engine reasons about.
-enum ClimberPoint { leftHand, rightHand, leftFoot, rightFoot, hipCenter }
+enum ClimberPoint {
+  leftHand,
+  rightHand,
+  leftFoot,
+  rightFoot,
+  hipCenter,
+  shoulderCenter,
+}
 
 /// A climber's hands, feet and hip center, derived from a raw ML Kit pose.
 /// A point is null when the landmarks it needs aren't confidently in frame.
@@ -43,6 +50,7 @@ class ClimberKeypoints {
     this.leftFoot,
     this.rightFoot,
     this.hipCenter,
+    this.shoulderCenter,
   });
 
   /// No climber in frame.
@@ -110,9 +118,9 @@ class ClimberKeypoints {
       );
     }
 
-    Keypoint? hipCenter() {
-      final left = visible(PoseLandmarkType.leftHip);
-      final right = visible(PoseLandmarkType.rightHip);
+    Keypoint? midpoint(PoseLandmarkType leftType, PoseLandmarkType rightType) {
+      final left = visible(leftType);
+      final right = visible(rightType);
       if (left == null || right == null) return null;
       return at(
         (left.x + right.x) / 2,
@@ -140,7 +148,11 @@ class ClimberKeypoints {
         PoseLandmarkType.rightAnkle,
         PoseLandmarkType.rightFootIndex,
       ),
-      hipCenter: hipCenter(),
+      hipCenter: midpoint(PoseLandmarkType.leftHip, PoseLandmarkType.rightHip),
+      shoulderCenter: midpoint(
+        PoseLandmarkType.leftShoulder,
+        PoseLandmarkType.rightShoulder,
+      ),
     );
   }
 
@@ -150,12 +162,17 @@ class ClimberKeypoints {
   final Keypoint? rightFoot;
   final Keypoint? hipCenter;
 
+  /// Midpoint of the shoulders. With [hipCenter], gives torso length, which
+  /// the beta planner uses to turn image distances into centimeters.
+  final Keypoint? shoulderCenter;
+
   Keypoint? operator [](ClimberPoint point) => switch (point) {
     ClimberPoint.leftHand => leftHand,
     ClimberPoint.rightHand => rightHand,
     ClimberPoint.leftFoot => leftFoot,
     ClimberPoint.rightFoot => rightFoot,
     ClimberPoint.hipCenter => hipCenter,
+    ClimberPoint.shoulderCenter => shoulderCenter,
   };
 }
 
@@ -216,6 +233,7 @@ class KeypointSmoother {
       leftFoot: update(ClimberPoint.leftFoot),
       rightFoot: update(ClimberPoint.rightFoot),
       hipCenter: update(ClimberPoint.hipCenter),
+      shoulderCenter: update(ClimberPoint.shoulderCenter),
     );
   }
 
