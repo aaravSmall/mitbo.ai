@@ -2,22 +2,23 @@
 
 Version roadmap for mitbo.ai, roughly in order of increasing difficulty. Each version depends on the previous being solid — don't skip ahead on the hard pieces (route detection, live conversation) before pose tracking + beta generation are working well.
 
-## v1 — Manual holds, static beta (MVP)
+## v1 — Auto color-based holds, static beta (MVP) — ✅ feature-complete in code (2026-10-04)
 
-- User captures a photo of the wall and manually taps/outlines the holds that make up their problem (no auto route detection).
+- ✅ **Done in code (2026-10-04):** Holds are detected automatically by color: when the climber settles on the start holds, mitbo samples their color from a clean wall reference frame and treats every same-color hold in frame as the problem. No manual hold marking, no per-climb setup. Real-device/gym validation still pending.
 - ✅ **Done (2026-10-03):** Pose tracking (ML Kit pose detection, BlazePose-based) follows the climber live via the phone's back camera (phone propped up hands-free, pointed at the wall), producing smoothed hand/foot/hip keypoints for the beta engine. Real-device/gym validation still pending.
-- System generates a beta sequence from hold geometry + climber height/reach, and narrates it via TTS **before** the climb starts.
+- ✅ **Done in code (2026-10-04):** System generates a beta sequence from hold geometry + climber height/reach (scaled by torso length in frame), and narrates it via on-device TTS **before** the climb starts, with replay/stop. Holds are numbered in beta order on the overlay.
 - No live adjustment — the beta is generated once, spoken once.
 
 ## v2 — Live cue triggering
 
 - Instead of narrating the full beta up front, fire each cue live: TTS speaks the next move when pose tracking detects the previous move has been completed (e.g. hand/foot has reached the expected hold).
 - Requires reliably detecting "move completed" from pose + hold positions, including tolerance for near-misses and adjustments.
+- Crux identification: flag the hardest move(s) in the sequence (approach not decided yet).
 
-## v3 — Auto hold detection
+## v3 — Learned hold detection
 
-- Replace manual hold-tapping with a vision model that detects all holds on the wall automatically.
-- Infer which holds belong to "this" problem from the climber's actual path (which holds get touched first/in sequence), rather than relying on gym color-coding.
+- Add a learned hold detector (ML model) alongside v1's color segmentation, so holds are found reliably even when wall paint, volumes, or lighting confuse color matching.
+- Path-based problem inference for gyms without clean color coding: infer which holds belong to "this" problem from the climber's actual path (which holds get touched first/in sequence).
 
 ## v4 — Live conversational feedback
 

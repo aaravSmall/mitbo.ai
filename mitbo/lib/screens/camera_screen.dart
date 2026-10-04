@@ -4,10 +4,20 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../beta/beta_narration.dart';
+import '../beta/beta_planner.dart';
+import '../services/beta_narrator.dart';
+import '../services/frame_grabber.dart';
 import '../services/pose_service.dart';
+import '../state/problem_session.dart';
+import '../state/profile_controller.dart';
+import '../vision/hold_segmenter.dart';
+import '../widgets/hold_overlay.dart';
 import '../widgets/pose_debug_chip.dart';
 import '../widgets/pose_debug_sheet.dart';
 import '../widgets/pose_overlay.dart';
+import '../widgets/problem_debug_panel.dart';
+import '../widgets/problem_status_pill.dart';
 
 enum _CameraStatus {
   checking,
@@ -21,12 +31,22 @@ enum _CameraStatus {
 }
 
 /// Shows a live back-camera preview once camera permission is granted, and
-/// runs pose tracking on the camera's image stream.
+/// runs pose tracking and automatic problem detection on the camera's image
+/// stream.
 ///
-/// Draws the detected skeleton over the preview. Debug builds add a bug icon
-/// in the app bar for a pose readout and live tuning.
+/// Draws the detected skeleton and the locked problem's holds (numbered
+/// in beta order) over the preview, with a status pill for detection
+/// progress. Once a problem locks, the beta is read aloud with on-device
+/// text-to-speech. Debug builds add a bug icon in the app bar for a
+/// pose/holds readout and live tuning.
 class CameraScreen extends StatefulWidget {
-  const CameraScreen({super.key});
+  const CameraScreen({super.key, this.profileController, this.narrator});
+
+  /// Source of the climber's height and wingspan for the beta.
+  final ProfileController? profileController;
+
+  /// Speaks the beta; defaults to the device's TTS. Injectable for tests.
+  final BetaNarrator? narrator;
 
   @override
   State<CameraScreen> createState() => _CameraScreenState();
@@ -38,6 +58,12 @@ class _CameraScreenState extends State<CameraScreen>
   CameraController? _controller;
   String? _errorMessage;
   final PoseService _poseService = PoseService();
+  final FrameGrabber _frameGrabber = FrameGrabber();
+  late final ProblemSession _problemSession;
+  late final BetaNarrator _narrator = widget.narrator ?? BetaNarrator();
+
+  // The beta most recently read aloud, so each one is narrated once.
+  BetaPlan? _narratedBeta;
 
   // Bumped whenever the camera is stopped, so an in-flight _startCamera can
   // tell it's been superseded and dispose what it created instead.
@@ -54,6 +80,11 @@ class _CameraScreenState extends State<CameraScreen>
   @override
   void initState() {
     super.initState();
+    _problemSession = ProblemSession(
+      frames: _poseService.latest,
+      grabFrame: _frameGrabber.grabNext,
+      profile: () => widget.profileController?.profile,
+    )..addListener(_onProblemChanged);
     WidgetsBinding.instance.addObserver(this);
     _bootstrap();
   }
@@ -61,6 +92,18 @@ class _CameraScreenState extends State<CameraScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // Stop listening to poses before the pose service (and its notifier)
+    // goes away below.
+    _problemSession
+      ..removeListener(_onProblemChanged)
+      ..dispose();
+    _frameGrabber.dispose();
+    // Only dispose a narrator this screen created.
+    if (widget.narrator == null) {
+      _narrator.dispose();
+    } else {
+      _narrator.stop();
+    }
     // Stop the stream before closing the detector so no frame reaches it
     // after it's closed.
     _stopCamera().whenComplete(_poseService.dispose);
@@ -77,6 +120,7 @@ class _CameraScreenState extends State<CameraScreen>
         return;
       }
       _suspended = true;
+      _narrator.stop();
       _stopCamera();
       setState(() => _status = _CameraStatus.checking);
       return;
@@ -145,6 +189,8 @@ class _CameraScreenState extends State<CameraScreen>
   /// rebuild so the preview isn't left pointing at a disposed controller.
   Future<void> _stopCamera() async {
     _cameraGeneration++;
+    // A wall snapshot requested from this camera will never arrive.
+    _frameGrabber.cancel();
     final controller = _controller;
     _controller = null;
     if (controller == null) return;
@@ -168,6 +214,8 @@ class _CameraScreenState extends State<CameraScreen>
     if (!mounted) return;
     // Don't let the last pose or its smoothing carry over into a new session.
     _poseService.reset();
+    // The phone may have moved: rescan the wall.
+    _problemSession.restart();
     final generation = _cameraGeneration;
     bool superseded() => !mounted || generation != _cameraGeneration;
 
@@ -198,13 +246,19 @@ class _CameraScreenState extends State<CameraScreen>
         await newController.dispose();
         return;
       }
-      await newController.startImageStream(
-        (image) => _poseService.processCameraImage(
+      await newController.startImageStream((image) {
+        final deviceOrientation = newController.value.deviceOrientation;
+        _poseService.processCameraImage(
           image,
           camera: backCamera,
-          deviceOrientation: newController.value.deviceOrientation,
-        ),
-      );
+          deviceOrientation: deviceOrientation,
+        );
+        _frameGrabber.onCameraImage(
+          image,
+          camera: backCamera,
+          deviceOrientation: deviceOrientation,
+        );
+      });
       if (superseded()) {
         await newController.stopImageStream();
         await newController.dispose();
@@ -227,6 +281,27 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  /// Reads a newly planned beta aloud, and stops talking when the problem
+  /// is reset or lost.
+  void _onProblemChanged() {
+    final beta = _problemSession.beta;
+    if (beta == null) {
+      if (_narratedBeta != null) {
+        _narratedBeta = null;
+        _narrator.stop();
+      }
+      return;
+    }
+    if (identical(beta, _narratedBeta)) return;
+    _narratedBeta = beta;
+    _narrator.narrate(betaCues(beta));
+  }
+
+  void _replayBeta() {
+    final beta = _problemSession.beta;
+    if (beta != null) _narrator.narrate(betaCues(beta));
+  }
+
   void _applyDebugSettings(PoseDebugSettings settings) {
     if (!mounted) return;
     if (settings.model != _poseService.model) {
@@ -235,6 +310,16 @@ class _CameraScreenState extends State<CameraScreen>
     _poseService
       ..alpha = settings.alpha
       ..handNudge = settings.handNudge;
+    final tolerance = _problemSession.params.tolerance;
+    if (settings.hueTolerance != tolerance.hueTolerance ||
+        settings.minSaturation != tolerance.minSaturation) {
+      _problemSession.params = SegmentationParams(
+        tolerance: tolerance.copyWith(
+          hueTolerance: settings.hueTolerance,
+          minSaturation: settings.minSaturation,
+        ),
+      );
+    }
     setState(() => _debugSettings = settings);
   }
 
@@ -319,12 +404,38 @@ class _CameraScreenState extends State<CameraScreen>
             Center(
               child: CameraPreview(
                 controller,
-                child: PoseOverlay(
-                  frames: _poseService.latest,
-                  showKeypoints:
-                      kDebugMode &&
-                      _showPoseDebug &&
-                      _debugSettings.showKeypoints,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    HoldOverlay(session: _problemSession),
+                    PoseOverlay(
+                      frames: _poseService.latest,
+                      showKeypoints:
+                          kDebugMode &&
+                          _showPoseDebug &&
+                          _debugSettings.showKeypoints,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: Center(
+                child: ListenableBuilder(
+                  listenable: Listenable.merge([_problemSession, _narrator]),
+                  builder: (context, _) => ProblemStatusPill(
+                    phase: _problemSession.phase,
+                    problem: _problemSession.problem,
+                    beta: _problemSession.beta,
+                    failureReason: _problemSession.failureReason,
+                    speaking: _narrator.speaking,
+                    onReset: _problemSession.resetProblem,
+                    onReplay: _replayBeta,
+                    onStopSpeaking: _narrator.stop,
+                  ),
                 ),
               ),
             ),
@@ -341,6 +452,16 @@ class _CameraScreenState extends State<CameraScreen>
                     settings: _debugSettings,
                     onChanged: _applyDebugSettings,
                   ),
+                ),
+              ),
+            if (kDebugMode && _showPoseDebug)
+              Positioned(
+                right: 12,
+                top: 12,
+                child: ProblemDebugPanel(
+                  session: _problemSession,
+                  refresh: _poseService.latest,
+                  showReference: _debugSettings.showWallReference,
                 ),
               ),
           ],

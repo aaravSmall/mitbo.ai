@@ -23,4 +23,11 @@ This isn't a single-model problem — it's three different problems stacked on t
 
 ## Status
 
-Early planning / v1 build. See [CONTEXT.md](CONTEXT.md) for the current architecture and approach, and [FUTURE_PLANS.md](FUTURE_PLANS.md) for the version roadmap.
+**v1 is feature-complete** (Flutter, iOS + Android, everything on-device):
+
+- **Pose tracking** — ML Kit (BlazePose) on the back-camera stream, smoothed hands/feet/hips/shoulders.
+- **Automatic problem detection** — step out of frame and mitbo snapshots the wall; settle on the start holds and it reads their color and outlines every hold of that color.
+- **Beta** — a geometry engine plans the move sequence from hold positions and your height/wingspan (scaled by your torso length in frame), and the overlay numbers each hand move.
+- **Spoken cues** — the beta is read aloud with the phone's built-in text-to-speech ("Left hand up to the hold above your right hand."), with replay/stop.
+
+The app lives in [`mitbo/`](mitbo/) (see its README to run it). [CONTEXT.md](CONTEXT.md) covers the architecture and decisions, and [FUTURE_PLANS.md](FUTURE_PLANS.md) the roadmap: live cue triggering and crux detection (v2), a learned hold detector (v3), and conversational feedback (v4).

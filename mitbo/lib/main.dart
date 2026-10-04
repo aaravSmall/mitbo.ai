@@ -41,7 +41,8 @@ class _MitboAppState extends State<MitboApp> {
         ),
         GoRoute(
           path: '/camera',
-          builder: (context, state) => const CameraScreen(),
+          builder: (context, state) =>
+              CameraScreen(profileController: controller),
         ),
         GoRoute(
           path: '/edit-profile',

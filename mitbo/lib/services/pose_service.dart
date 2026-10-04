@@ -97,7 +97,6 @@ class PoseService {
   ///
   /// iOS frames only need the sensor orientation; on Android the current
   /// device orientation has to be compensated for too.
-  @visibleForTesting
   static InputImageRotation? rotationFor(
     CameraDescription camera,
     DeviceOrientation deviceOrientation,
@@ -113,6 +112,15 @@ class PoseService {
         : (sensorOrientation - deviceDegrees + 360) % 360;
     return InputImageRotationValue.fromRawValue(degrees);
   }
+
+  /// Rotation of the space ML Kit reports landmark coordinates in, for a
+  /// frame whose upright [rotation] is as given. ML Kit ignores the rotation
+  /// on iOS (frames already arrive upright), so its coordinates are in the
+  /// raw image's space there.
+  static InputImageRotation coordinateRotation(InputImageRotation rotation) =>
+      defaultTargetPlatform == TargetPlatform.iOS
+      ? InputImageRotation.rotation0deg
+      : rotation;
 
   /// Wraps a single-plane nv21 (Android) or bgra8888 (iOS) frame for ML Kit.
   /// Returns null for any other format.
@@ -160,11 +168,7 @@ class PoseService {
       if (_disposed || session != _session) return;
       final pose = poses.isEmpty ? null : poses.first;
       final imageSize = Size(image.width.toDouble(), image.height.toDouble());
-      // ML Kit ignores the rotation on iOS (frames already arrive upright),
-      // so its coordinates are in the raw image's space there.
-      final coordinateRotation = defaultTargetPlatform == TargetPlatform.iOS
-          ? InputImageRotation.rotation0deg
-          : rotation;
+      final coordinateRotation = PoseService.coordinateRotation(rotation);
       final raw = pose == null
           ? ClimberKeypoints.none
           : ClimberKeypoints.fromPose(

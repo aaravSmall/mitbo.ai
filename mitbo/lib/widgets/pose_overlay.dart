@@ -99,6 +99,7 @@ class PosePainter extends CustomPainter {
     ClimberPoint.leftFoot: ('LF', _footColor),
     ClimberPoint.rightFoot: ('RF', _footColor),
     ClimberPoint.hipCenter: ('HIP', _hipColor),
+    ClimberPoint.shoulderCenter: ('SH', _hipColor),
   };
 
   @override
