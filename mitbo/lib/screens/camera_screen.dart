@@ -4,10 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../services/frame_grabber.dart';
 import '../services/pose_service.dart';
+import '../state/problem_session.dart';
+import '../vision/hold_segmenter.dart';
+import '../widgets/hold_overlay.dart';
 import '../widgets/pose_debug_chip.dart';
 import '../widgets/pose_debug_sheet.dart';
 import '../widgets/pose_overlay.dart';
+import '../widgets/problem_debug_panel.dart';
+import '../widgets/problem_status_pill.dart';
 
 enum _CameraStatus {
   checking,
@@ -21,10 +27,12 @@ enum _CameraStatus {
 }
 
 /// Shows a live back-camera preview once camera permission is granted, and
-/// runs pose tracking on the camera's image stream.
+/// runs pose tracking and automatic problem detection on the camera's image
+/// stream.
 ///
-/// Draws the detected skeleton over the preview. Debug builds add a bug icon
-/// in the app bar for a pose readout and live tuning.
+/// Draws the detected skeleton and the locked problem's holds over the
+/// preview, with a status pill for detection progress. Debug builds add a
+/// bug icon in the app bar for a pose/holds readout and live tuning.
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
 
@@ -38,6 +46,8 @@ class _CameraScreenState extends State<CameraScreen>
   CameraController? _controller;
   String? _errorMessage;
   final PoseService _poseService = PoseService();
+  final FrameGrabber _frameGrabber = FrameGrabber();
+  late final ProblemSession _problemSession;
 
   // Bumped whenever the camera is stopped, so an in-flight _startCamera can
   // tell it's been superseded and dispose what it created instead.
@@ -54,6 +64,10 @@ class _CameraScreenState extends State<CameraScreen>
   @override
   void initState() {
     super.initState();
+    _problemSession = ProblemSession(
+      frames: _poseService.latest,
+      grabFrame: _frameGrabber.grabNext,
+    );
     WidgetsBinding.instance.addObserver(this);
     _bootstrap();
   }
@@ -61,6 +75,10 @@ class _CameraScreenState extends State<CameraScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // Stop listening to poses before the pose service (and its notifier)
+    // goes away below.
+    _problemSession.dispose();
+    _frameGrabber.dispose();
     // Stop the stream before closing the detector so no frame reaches it
     // after it's closed.
     _stopCamera().whenComplete(_poseService.dispose);
@@ -145,6 +163,8 @@ class _CameraScreenState extends State<CameraScreen>
   /// rebuild so the preview isn't left pointing at a disposed controller.
   Future<void> _stopCamera() async {
     _cameraGeneration++;
+    // A wall snapshot requested from this camera will never arrive.
+    _frameGrabber.cancel();
     final controller = _controller;
     _controller = null;
     if (controller == null) return;
@@ -168,6 +188,8 @@ class _CameraScreenState extends State<CameraScreen>
     if (!mounted) return;
     // Don't let the last pose or its smoothing carry over into a new session.
     _poseService.reset();
+    // The phone may have moved: rescan the wall.
+    _problemSession.restart();
     final generation = _cameraGeneration;
     bool superseded() => !mounted || generation != _cameraGeneration;
 
@@ -198,13 +220,19 @@ class _CameraScreenState extends State<CameraScreen>
         await newController.dispose();
         return;
       }
-      await newController.startImageStream(
-        (image) => _poseService.processCameraImage(
+      await newController.startImageStream((image) {
+        final deviceOrientation = newController.value.deviceOrientation;
+        _poseService.processCameraImage(
           image,
           camera: backCamera,
-          deviceOrientation: newController.value.deviceOrientation,
-        ),
-      );
+          deviceOrientation: deviceOrientation,
+        );
+        _frameGrabber.onCameraImage(
+          image,
+          camera: backCamera,
+          deviceOrientation: deviceOrientation,
+        );
+      });
       if (superseded()) {
         await newController.stopImageStream();
         await newController.dispose();
@@ -235,6 +263,16 @@ class _CameraScreenState extends State<CameraScreen>
     _poseService
       ..alpha = settings.alpha
       ..handNudge = settings.handNudge;
+    final tolerance = _problemSession.params.tolerance;
+    if (settings.hueTolerance != tolerance.hueTolerance ||
+        settings.minSaturation != tolerance.minSaturation) {
+      _problemSession.params = SegmentationParams(
+        tolerance: tolerance.copyWith(
+          hueTolerance: settings.hueTolerance,
+          minSaturation: settings.minSaturation,
+        ),
+      );
+    }
     setState(() => _debugSettings = settings);
   }
 
@@ -319,12 +357,34 @@ class _CameraScreenState extends State<CameraScreen>
             Center(
               child: CameraPreview(
                 controller,
-                child: PoseOverlay(
-                  frames: _poseService.latest,
-                  showKeypoints:
-                      kDebugMode &&
-                      _showPoseDebug &&
-                      _debugSettings.showKeypoints,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    HoldOverlay(session: _problemSession),
+                    PoseOverlay(
+                      frames: _poseService.latest,
+                      showKeypoints:
+                          kDebugMode &&
+                          _showPoseDebug &&
+                          _debugSettings.showKeypoints,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: Center(
+                child: ListenableBuilder(
+                  listenable: _problemSession,
+                  builder: (context, _) => ProblemStatusPill(
+                    phase: _problemSession.phase,
+                    problem: _problemSession.problem,
+                    failureReason: _problemSession.failureReason,
+                    onReset: _problemSession.resetProblem,
+                  ),
                 ),
               ),
             ),
@@ -341,6 +401,16 @@ class _CameraScreenState extends State<CameraScreen>
                     settings: _debugSettings,
                     onChanged: _applyDebugSettings,
                   ),
+                ),
+              ),
+            if (kDebugMode && _showPoseDebug)
+              Positioned(
+                right: 12,
+                top: 12,
+                child: ProblemDebugPanel(
+                  session: _problemSession,
+                  refresh: _poseService.latest,
+                  showReference: _debugSettings.showWallReference,
                 ),
               ),
           ],
