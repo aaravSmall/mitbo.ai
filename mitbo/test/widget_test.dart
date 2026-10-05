@@ -111,6 +111,23 @@ void main() {
     },
   );
 
+  testWidgets('cue mode toggles between live cues and the full beta', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'profile_height_cm': 180.0,
+      'profile_wingspan_cm': 182.0,
+    });
+
+    await tester.pumpWidget(MitboApp());
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Live cues on (tap for full beta)'), findsOneWidget);
+    await tester.tap(find.byTooltip('Live cues on (tap for full beta)'));
+    await tester.pump();
+    expect(find.byTooltip('Full beta on (tap for live cues)'), findsOneWidget);
+  });
+
   testWidgets('pose debug readout toggle is off by default and flips', (
     tester,
   ) async {

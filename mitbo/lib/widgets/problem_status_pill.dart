@@ -1,15 +1,21 @@
 import 'package:flutter/material.dart';
 
 import '../beta/beta_planner.dart';
+import '../beta/beta_tracker.dart';
 import '../state/problem_session.dart';
 import '../vision/problem_detector.dart';
 
-/// What to tell the climber in each detection phase.
+/// What to tell the climber in each detection phase. Once locked, the
+/// climb's progress ([climbState], [movesDone] of [totalMoves]) is shown
+/// when given.
 String problemStatusText(
   ProblemPhase phase, {
   DetectedProblem? problem,
   BetaPlan? beta,
   String? failureReason,
+  ClimbState? climbState,
+  int movesDone = 0,
+  int? totalMoves,
 }) {
   switch (phase) {
     case ProblemPhase.scanningWall:
@@ -24,8 +30,22 @@ String problemStatusText(
       final count = problem.holds.length;
       final color = '${name[0].toUpperCase()}${name.substring(1)}';
       final holds = '$color problem · $count ${count == 1 ? 'hold' : 'holds'}';
+      switch (climbState) {
+        case ClimbState.sent:
+          return '$color problem · sent!';
+        case ClimbState.offWall:
+          return 'Get back on the start holds to go again';
+        case ClimbState.replanning:
+          return 'Working out new beta…';
+        case ClimbState.climbing:
+        case null:
+          break;
+      }
       if (beta == null) return holds;
-      final moves = beta.handMoveCount;
+      final moves = totalMoves ?? beta.handMoveCount;
+      if (climbState == ClimbState.climbing && movesDone > 0) {
+        return '$holds · move ${movesDone + 1} of $moves';
+      }
       return '$holds · $moves ${moves == 1 ? 'move' : 'moves'}';
     case ProblemPhase.failed:
       return failureReason ?? "Couldn't read the problem";
@@ -46,6 +66,10 @@ class ProblemStatusPill extends StatelessWidget {
     this.onReset,
     this.onReplay,
     this.onStopSpeaking,
+    this.climbState,
+    this.movesDone = 0,
+    this.totalMoves,
+    this.replayTooltip = 'Replay beta',
   });
 
   final ProblemPhase phase;
@@ -58,6 +82,13 @@ class ProblemStatusPill extends StatelessWidget {
   final VoidCallback? onReset;
   final VoidCallback? onReplay;
   final VoidCallback? onStopSpeaking;
+
+  /// Live climb progress, from the coach.
+  final ClimbState? climbState;
+  final int movesDone;
+  final int? totalMoves;
+
+  final String replayTooltip;
 
   @override
   Widget build(BuildContext context) {
@@ -103,6 +134,9 @@ class ProblemStatusPill extends StatelessWidget {
                   problem: problem,
                   beta: beta,
                   failureReason: failureReason,
+                  climbState: climbState,
+                  movesDone: movesDone,
+                  totalMoves: totalMoves,
                 ),
                 style: const TextStyle(color: Colors.white),
               ),
@@ -110,7 +144,7 @@ class ProblemStatusPill extends StatelessWidget {
             if (canReplay)
               IconButton(
                 onPressed: speaking ? onStopSpeaking : onReplay,
-                tooltip: speaking ? 'Stop' : 'Replay beta',
+                tooltip: speaking ? 'Stop' : replayTooltip,
                 icon: Icon(
                   speaking ? Icons.stop_circle_outlined : Icons.volume_up,
                   color: Colors.white,

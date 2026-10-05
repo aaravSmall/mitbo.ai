@@ -2,25 +2,29 @@ import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
 import '../beta/beta_planner.dart';
+import '../state/climb_coach.dart';
 import '../state/problem_session.dart';
 import '../vision/hold_segmenter.dart';
 import 'pose_mapping.dart';
 
 /// Outlines the locked problem's holds over the camera preview, marking
 /// start holds "S" and the top hold "T", and numbering the hand moves of
-/// the beta in order ("1L", "2R", ...).
+/// the beta in order ("1L", "2R", ...). The crux move's number is amber.
+/// With a [coach], follows its (possibly replanned) beta and rings the
+/// hold the climber's next hand move goes to.
 ///
 /// Must be sized to exactly cover the preview (like `PoseOverlay`).
 class HoldOverlay extends StatelessWidget {
-  const HoldOverlay({super.key, required this.session});
+  const HoldOverlay({super.key, required this.session, this.coach});
 
   final ProblemSession session;
+  final ClimbCoach? coach;
 
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
       child: CustomPaint(
-        painter: HoldPainter(session: session),
+        painter: HoldPainter(session: session, coach: coach),
         size: Size.infinite,
       ),
     );
@@ -49,13 +53,19 @@ Rect holdRectOnPreview(
 }
 
 class HoldPainter extends CustomPainter {
-  HoldPainter({required this.session}) : super(repaint: session);
+  HoldPainter({required this.session, this.coach})
+    : super(repaint: Listenable.merge([session, coach]));
 
   final ProblemSession session;
+  final ClimbCoach? coach;
 
   // White line on a dark halo stays visible on any hold color.
   static const _lineColor = Colors.white;
   static const _haloColor = Colors.black54;
+
+  // The next hold to grab, and the crux move's label.
+  static const _nextColor = Color(0xFF4ADE80);
+  static const _cruxColor = Color(0xFFFBBF24);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -64,7 +74,10 @@ class HoldPainter extends CustomPainter {
     if (problem == null || imageSize == null) return;
 
     final top = problem.topHold;
-    final steps = betaStepLabels(session.beta);
+    final beta = coach?.plan ?? session.beta;
+    final steps = betaStepLabels(beta);
+    final crux = cruxHold(beta);
+    final next = coach?.nextTargetHold;
     for (var i = 0; i < problem.holds.length; i++) {
       final hold = problem.holds[i];
       final isStart = problem.startHoldIndices.contains(i);
@@ -76,6 +89,16 @@ class HoldPainter extends CustomPainter {
       ).inflate(4);
       final outline = RRect.fromRectAndRadius(rect, const Radius.circular(6));
       final width = isStart || isTop ? 4.0 : 2.5;
+
+      if (i == next) {
+        canvas.drawRRect(
+          outline.inflate(6),
+          Paint()
+            ..color = _nextColor
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 5,
+        );
+      }
 
       canvas.drawRRect(
         outline,
@@ -94,7 +117,15 @@ class HoldPainter extends CustomPainter {
       if (isStart) _label(canvas, 'S', rect);
       if (isTop) _label(canvas, 'T', rect);
       final step = steps[i];
-      if (step != null) _label(canvas, step, rect, below: true);
+      if (step != null) {
+        _label(
+          canvas,
+          step,
+          rect,
+          below: true,
+          background: i == crux ? _cruxColor : _lineColor,
+        );
+      }
     }
   }
 
@@ -103,6 +134,7 @@ class HoldPainter extends CustomPainter {
     String text,
     Rect rect, {
     bool below = false,
+    Color background = _lineColor,
   }) {
     final painter = TextPainter(
       text: TextSpan(
@@ -124,14 +156,15 @@ class HoldPainter extends CustomPainter {
     );
     canvas.drawRRect(
       RRect.fromRectAndRadius(badge, const Radius.circular(4)),
-      Paint()..color = _lineColor,
+      Paint()..color = background,
     );
     painter.paint(canvas, badge.topLeft + const Offset(padding, padding / 2));
     painter.dispose();
   }
 
   @override
-  bool shouldRepaint(HoldPainter oldDelegate) => oldDelegate.session != session;
+  bool shouldRepaint(HoldPainter oldDelegate) =>
+      oldDelegate.session != session || oldDelegate.coach != coach;
 }
 
 /// Labels for the holds hand moves land on, keyed by hold index: the move
@@ -149,4 +182,12 @@ Map<int, String> betaStepLabels(BetaPlan? beta) {
     labels[hold] = labels.containsKey(hold) ? '${labels[hold]} $label' : label;
   }
   return labels;
+}
+
+/// The hold the crux move lands on (index into the problem's holds), or
+/// null when the beta has no crux.
+int? cruxHold(BetaPlan? beta) {
+  final crux = beta?.cruxMove;
+  if (beta == null || crux == null) return null;
+  return beta.moves[crux].toHold;
 }

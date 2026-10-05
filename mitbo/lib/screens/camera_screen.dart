@@ -4,11 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../beta/beta_narration.dart';
-import '../beta/beta_planner.dart';
 import '../services/beta_narrator.dart';
 import '../services/frame_grabber.dart';
 import '../services/pose_service.dart';
+import '../state/climb_coach.dart';
 import '../state/problem_session.dart';
 import '../state/profile_controller.dart';
 import '../vision/hold_segmenter.dart';
@@ -35,9 +34,11 @@ enum _CameraStatus {
 /// stream.
 ///
 /// Draws the detected skeleton and the locked problem's holds (numbered
-/// in beta order) over the preview, with a status pill for detection
-/// progress. Once a problem locks, the beta is read aloud with on-device
-/// text-to-speech. Debug builds add a bug icon in the app bar for a
+/// in beta order, next hold ringed) over the preview, with a status pill
+/// for detection and climb progress. Once a problem locks, a [ClimbCoach]
+/// speaks the beta with on-device text-to-speech: move by move as the
+/// climber climbs (live cues), or all at once (full beta), toggled from
+/// the app bar. Debug builds add a bug icon in the app bar for a
 /// pose/holds readout and live tuning.
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key, this.profileController, this.narrator});
@@ -61,9 +62,7 @@ class _CameraScreenState extends State<CameraScreen>
   final FrameGrabber _frameGrabber = FrameGrabber();
   late final ProblemSession _problemSession;
   late final BetaNarrator _narrator = widget.narrator ?? BetaNarrator();
-
-  // The beta most recently read aloud, so each one is narrated once.
-  BetaPlan? _narratedBeta;
+  late final ClimbCoach _coach;
 
   // Bumped whenever the camera is stopped, so an in-flight _startCamera can
   // tell it's been superseded and dispose what it created instead.
@@ -84,7 +83,13 @@ class _CameraScreenState extends State<CameraScreen>
       frames: _poseService.latest,
       grabFrame: _frameGrabber.grabNext,
       profile: () => widget.profileController?.profile,
-    )..addListener(_onProblemChanged);
+    );
+    _coach = ClimbCoach(
+      session: _problemSession,
+      frames: _poseService.latest,
+      narrator: _narrator,
+      profile: () => widget.profileController?.profile,
+    );
     WidgetsBinding.instance.addObserver(this);
     _bootstrap();
   }
@@ -93,10 +98,9 @@ class _CameraScreenState extends State<CameraScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     // Stop listening to poses before the pose service (and its notifier)
-    // goes away below.
-    _problemSession
-      ..removeListener(_onProblemChanged)
-      ..dispose();
+    // goes away below. The coach listens to the session, so it goes first.
+    _coach.dispose();
+    _problemSession.dispose();
     _frameGrabber.dispose();
     // Only dispose a narrator this screen created.
     if (widget.narrator == null) {
@@ -281,25 +285,12 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  /// Reads a newly planned beta aloud, and stops talking when the problem
-  /// is reset or lost.
-  void _onProblemChanged() {
-    final beta = _problemSession.beta;
-    if (beta == null) {
-      if (_narratedBeta != null) {
-        _narratedBeta = null;
-        _narrator.stop();
-      }
-      return;
-    }
-    if (identical(beta, _narratedBeta)) return;
-    _narratedBeta = beta;
-    _narrator.narrate(betaCues(beta));
-  }
-
-  void _replayBeta() {
-    final beta = _problemSession.beta;
-    if (beta != null) _narrator.narrate(betaCues(beta));
+  void _toggleCueMode() {
+    setState(() {
+      _coach.mode = _coach.mode == CueMode.live
+          ? CueMode.upfront
+          : CueMode.live;
+    });
   }
 
   void _applyDebugSettings(PoseDebugSettings settings) {
@@ -329,6 +320,17 @@ class _CameraScreenState extends State<CameraScreen>
       appBar: AppBar(
         title: const Text('Camera'),
         actions: [
+          IconButton(
+            icon: Icon(
+              _coach.mode == CueMode.live
+                  ? Icons.record_voice_over
+                  : Icons.format_list_numbered,
+            ),
+            tooltip: _coach.mode == CueMode.live
+                ? 'Live cues on (tap for full beta)'
+                : 'Full beta on (tap for live cues)',
+            onPressed: _toggleCueMode,
+          ),
           if (kDebugMode)
             IconButton(
               icon: Icon(
@@ -407,7 +409,7 @@ class _CameraScreenState extends State<CameraScreen>
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    HoldOverlay(session: _problemSession),
+                    HoldOverlay(session: _problemSession, coach: _coach),
                     PoseOverlay(
                       frames: _poseService.latest,
                       showKeypoints:
@@ -425,16 +427,26 @@ class _CameraScreenState extends State<CameraScreen>
               bottom: 16,
               child: Center(
                 child: ListenableBuilder(
-                  listenable: Listenable.merge([_problemSession, _narrator]),
+                  listenable: Listenable.merge([
+                    _problemSession,
+                    _coach,
+                    _narrator,
+                  ]),
                   builder: (context, _) => ProblemStatusPill(
                     phase: _problemSession.phase,
                     problem: _problemSession.problem,
-                    beta: _problemSession.beta,
+                    beta: _coach.plan,
                     failureReason: _problemSession.failureReason,
                     speaking: _narrator.speaking,
                     onReset: _problemSession.resetProblem,
-                    onReplay: _replayBeta,
+                    onReplay: _coach.replay,
                     onStopSpeaking: _narrator.stop,
+                    climbState: _coach.state,
+                    movesDone: _coach.movesDone,
+                    totalMoves: _coach.state == null ? null : _coach.totalMoves,
+                    replayTooltip: _coach.mode == CueMode.live
+                        ? 'Repeat cue'
+                        : 'Replay beta',
                   ),
                 ),
               ),

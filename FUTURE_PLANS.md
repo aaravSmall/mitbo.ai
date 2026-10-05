@@ -9,11 +9,12 @@ Version roadmap for mitbo.ai, roughly in order of increasing difficulty. Each ve
 - ✅ **Done in code (2026-10-04):** System generates a beta sequence from hold geometry + climber height/reach (scaled by torso length in frame), and narrates it via on-device TTS **before** the climb starts, with replay/stop. Holds are numbered in beta order on the overlay.
 - No live adjustment — the beta is generated once, spoken once.
 
-## v2 — Live cue triggering
+## v2 — Live cue triggering — ✅ done in code (2026-10-05)
 
-- Instead of narrating the full beta up front, fire each cue live: TTS speaks the next move when pose tracking detects the previous move has been completed (e.g. hand/foot has reached the expected hold).
-- Requires reliably detecting "move completed" from pose + hold positions, including tolerance for near-misses and adjustments.
-- Crux identification: flag the hardest move(s) in the sequence (approach not decided yet).
+- ✅ Instead of narrating the full beta up front, each cue fires live: TTS speaks the next move when pose tracking sees the previous hand move land on its hold (held 300 ms). Foot moves ride along with the hand move they set up, so flaky foot tracking can't stall the cues; a two-step lookahead covers missed detections.
+- ✅ Crux identification: a geometry-only difficulty score per move (span, reach above the feet, height gained, crossing, big move); the hardest move above a threshold is announced and marked amber on the overlay.
+- ✅ Extra: off-beta replanning (grab a different hold → new beta from where you are), off-the-wall detection with restart from the start holds, a send call, and a live / full-beta toggle (v1 behavior kept as an option).
+- Pending: `flutter analyze` / `flutter test` on a real machine, then gym testing and threshold tuning.
 
 ## v3 — Learned hold detection
 

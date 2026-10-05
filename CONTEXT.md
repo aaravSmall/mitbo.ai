@@ -31,10 +31,22 @@ Not an LLM-native task. Treated as geometry/physical-constraint reasoning: a sim
 - *Scale:* the climber's torso (shoulder center → hip center ≈ 29% of height) at the start position converts image distances to centimeters. Falls back to assuming 3.5 m of visible wall when the torso isn't measurable.
 - *Reach model:* max hand span 0.9 × wingspan; max reach above the higher foot = shoulder height (0.87 × height incl. toes) + arm (wingspan/2 − 0.1 × height); ideal gain per move 0.35 × wingspan; feet stay ≥ 0.45 × height below the lower hand; high steps ≤ 0.6 × height.
 - *Sequencing:* the lower hand moves to the reachable hold above it closest to the ideal gain over the other hand, penalizing crosses, stacking and near-max stretches; a foot steps up (onto a hold, or a smear) when hands run out of reach; if nothing is comfortably reachable the nearest hold above is a "big move"; finish matched on the top hold.
-Narration is a separate layer (`beta_narration.dart`) that only phrases the planned moves. v1 uses plain templates (offline, predictable); an LLM can replace that layer later without touching the planner.
+Narration is a separate layer (`beta_narration.dart`) that only phrases the planned moves. It uses plain templates (offline, predictable); an LLM can replace that layer later without touching the planner.
+
+*Crux (v2, `lib/beta/crux.dart`):* every hand move gets a geometry-only difficulty score: hand span past 60% of max span, reach above the higher foot past 75% of max reach, height gained past 1.1× the ideal gain (half weight), crossing the other hand (+0.3), big move (+1). The hardest move scoring ≥ 0.6 is the crux (`BetaPlan.cruxMove`); below that, no move stands out and none is flagged. Narration names it ("The crux is move 4.", "Crux. Right hand…") and the overlay colors its number amber. Hold quality isn't part of it yet (holds are just blobs, so there's no jug-vs-crimp information until v3).
 
 **D. Text-to-speech delivery**
-Spoken cues via the phone's built-in, on-device TTS (`flutter_tts`). v1 reads the whole beta once, as soon as the problem locks (the climber is on the start holds), with a replay/stop button; live-triggered cues come later (see FUTURE_PLANS.md).
+Spoken cues via the phone's built-in, on-device TTS (`flutter_tts`). Two modes, toggled from the app bar (`ClimbCoach.mode`):
+- *Live cues* (v2, default): when the problem locks, mitbo says the intro and the first move; after that, each cue is spoken the moment the previous move is done. The speaker button repeats the current cue.
+- *Full beta* (v1): the whole beta is read once when the problem locks, with replay/stop.
+
+**E. Live move tracking (v2)**
+`BetaTracker` (`lib/beta/beta_tracker.dart`, pure logic with injected time) follows the climber through the plan from the smoothed pose stream; `ClimbCoach` (`lib/state/climb_coach.dart`) wires it to the session, the narrator and the UI.
+- *Steps:* the plan is grouped into one step per hand move, with any foot moves folded into the hand move they set up ("Left foot up onto the next foothold. Then right hand up to the next hold."). Feet track poorly on a wall (small, hidden, smearing), so they never block progress — only hand landings do.
+- *Move done:* the step's hand stays on its target hold (hold box + 0.03 margin) for 300 ms. Landings are checked against the current step and the next one, so one missed detection doesn't stall the cues (the skipped step is assumed done).
+- *Off-beta:* a hand staying 800 ms on a problem hold the beta didn't plan for (not lower than where it should be, so dropping a hand to chalk past a low hold doesn't count) → replan from the holds the climber is on, keeping the original wall scale, and say "New beta from here."
+- *Off the wall:* both hands out of sight 2.5 s, or both below the start holds for 1 s → "Off the wall…". Both hands back on the start holds for 1 s → "From the start." and the original beta restarts.
+- *Send:* the final match lands → "Nice send!". The status pill shows progress ("move 3 of 6", "sent!"), and the overlay rings the next hold in green.
 
 ## Design principle
 
@@ -52,7 +64,8 @@ Geometry/physics engine does the reasoning; the LLM does the narration. Don't as
 
 - ~~Camera calibration~~ — v1 answer: the climber's torso length in frame sets the scale (see C). Assumes the wall is roughly flat and facing the camera; steep angles or overhangs will distort distances.
 - ~~Body proportions input~~ — v1 answer: ask once in onboarding (height/wingspan), editable later.
-- What counts as a "crux" in the geometry model — largest reach-to-limb-length ratio? Worst hold quality combined with reach? (Deferred to v2.)
+- ~~What counts as a "crux"~~ — v2 answer: the hardest move by a geometry-only difficulty score (span, reach above feet, gain, crossing, big move), if it clears a threshold (see C). Hold quality joins the score once v3 can tell hold types apart.
+- Live tracking thresholds (300 ms settle, 800 ms off-beta, 2.5 s lost hands) are first guesses — tune at the gym.
 - Telling holds apart from wall paint, volumes, and other features of a similar color — size/shape filtering is the v1 answer; a learned hold detector is the v3 answer.
 
 ## Hold detection defaults
@@ -66,6 +79,14 @@ Starting values, all tunable from the debug sheet or in code (`SegmentationParam
 - Blobs: 3x3 open + close; keep 0.02%–5% of the frame, fill ratio ≥ 0.2, aspect ≤ 8:1.
 - Start holds: hold box (+0.02 margin) under each hand, else nearest within 0.06.
 
+## v2 scope
+
+- Live cue triggering: each cue fires when pose tracking sees the previous move done. **Done in code** (2026-10-05, `v2-live-cues` branch).
+- Crux identification. **Done in code** (2026-10-05).
+- Beyond the roadmap: off-beta replanning, off-the-wall/restart handling, and a live/full-beta toggle. **Done in code** (2026-10-05).
+
+Not compiled in the authoring workspace (no Flutter SDK there) — run `flutter pub get && flutter analyze && flutter test` before merging.
+
 ## Gym test checklist
 
 For the first session at the wall with a real phone (debug build, bug icon on, "Show wall reference" on):
@@ -78,6 +99,10 @@ For the first session at the wall with a real phone (debug build, bug icon on, "
 - [ ] Missed holds: small feet/crimps, holds the climber blocked during the scan.
 - [ ] Overlay alignment: do the outlines sit on the holds, on Android and iOS, portrait and landscape?
 - [ ] Performance: pose FPS (debug chip) before vs. during scan/detection.
+- [ ] Live cues (v2): does each cue fire within ~0.5 s of landing the previous hold, and *not* when a hand brushes past one? Does TTS latency feel OK mid-move?
+- [ ] Off-beta: grab a different hold on purpose — does it replan within ~1 s? Any false replans from chalking up, shaking out, or L/R hand swaps in ML Kit?
+- [ ] Off the wall: drop off mid-problem and after the send — is it noticed, and does getting back on the start restart cleanly?
+- [ ] Crux: does the flagged move match where you actually struggle? Note problems where it's wrong.
 
 ## Testing / data
 
@@ -90,4 +115,5 @@ Plan is to test on the builder's own home wall or local gym — this gives a nat
 - 2026-10-03: Pose tracking milestone done in code. ML Kit pose detection (stream mode) runs on the back-camera stream with a skeleton overlay; `ClimberKeypoints` turns each pose into smoothed, normalized hands/feet/hip-center points with confidences for the beta engine. Debug-only tools (debug builds only, compiled out of release): FPS/landmark chip, smoothed-keypoint view, base/accurate model switch, live alpha and hand-nudge sliders. iOS camera permission fixed (Podfile `PERMISSION_CAMERA=1`). Verified on one Android phone (33 landmarks detected); overlay alignment, the keypoints/debug tools, iOS on a real device, and testing at the gym/home wall are still pending. Next: manual hold marking on a captured frame.
 - 2026-10-04: Hold identification decided: v1 is fully automatic and color-based (no manual tapping). Color is sampled from a clean wall reference frame at the start holds; all same-color holds in frame form the problem. Crux identification moved to v2. Docs updated to match.
 - 2026-10-04: Hold detection milestone done in code (on the `hold-detection` branch; not compiled in the workspace that wrote it, so `flutter analyze` / `flutter test` must be run before merging). Pipeline: `FrameGrabber` hands out upright 320 px `WallFrame` snapshots on demand (no per-frame cost otherwise); `WallReferenceTracker` keeps a clean wall snapshot while nobody is in frame; `StartDetector` fires when both hands settle above the hips for 1.2 s; `detectProblem` samples the start-hold color from the snapshot and segments every same-color hold (HSV mask, open/close, connected components, size/shape filters), running in an isolate. `ProblemSession` drives it live; `HoldOverlay` outlines the holds (S = start, T = top) and a status pill shows progress with Reset. Debug: wall reference thumbnail, sampled HSV readout, hue-tolerance/min-saturation sliders. Next: run the gym test checklist above, then the beta engine.
+- 2026-10-05: v2 done in code on the `v2-live-cues` branch. Crux identification (geometry-only difficulty score per move, hardest above threshold flagged, announced and colored on the overlay). Live cue triggering via `BetaTracker` + `ClimbCoach`: one cue per hand move (foot moves folded in), spoken when the previous hand lands on its target; lookahead for missed detections; off-beta replanning from the climber's current holds; off-the-wall detection and restart from the start holds; "Nice send!". App bar toggle between live cues and the v1 full readout. Not compiled in the authoring workspace — run analyze/test before merging, then the v2 items on the gym checklist.
 - 2026-10-04: Beta engine and TTS done in code — v1 feature-complete. `planBeta` sequences moves from hold geometry + a height/wingspan reach model, scaled by torso length in frame; `betaCues` phrases them ("Left hand up to the hold above your right hand."); `BetaNarrator` reads them with on-device TTS as soon as the problem locks, with replay/stop on the status pill, and the overlay numbers each hand move on its hold. Not compiled in the authoring workspace — run `flutter pub get && flutter analyze && flutter test` before merging.
