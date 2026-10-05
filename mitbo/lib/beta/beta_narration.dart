@@ -1,4 +1,5 @@
 import 'beta_planner.dart';
+import 'beta_tracker.dart';
 
 /// Turns a [BetaPlan] into spoken cues, in order: an intro, the start
 /// position, then one cue per move.
@@ -33,6 +34,50 @@ String _cruxSentence(BetaPlan plan) {
   final crux = plan.cruxHandMove;
   return crux == null ? '' : ' The crux is move $crux.';
 }
+
+/// Spoken once a problem locks in live mode, before the first step:
+/// "Got the red problem: 6 moves. The crux is move 4."
+String liveIntro(BetaPlan plan, {String? colorName}) {
+  final hands = plan.handMoveCount;
+  if (hands == 0) return "You're already on the top hold.";
+  final moves = '$hands ${hands == 1 ? 'move' : 'moves'}';
+  final got = colorName == null ? 'Got it' : 'Got the $colorName problem';
+  return '$got: $moves.${_cruxSentence(plan)}';
+}
+
+/// The live cue for one [step]: its foot moves (smears are left out), then
+/// the hand move that finishes it. "Left foot up onto the next foothold.
+/// Then right hand up to the next hold." A step holding the crux starts
+/// with "Crux.".
+String stepCue(BetaPlan plan, BetaStep step) {
+  final feet = <String>[];
+  var crux = false;
+  for (final i in step.moveIndices) {
+    if (i == plan.cruxMove) crux = true;
+    if (i == step.handMoveIndex) continue;
+    final move = plan.moves[i];
+    if (move.kind == MoveKind.smear) continue;
+    feet.add(moveCue(move, live: true));
+  }
+  final hand = moveCue(plan.moves[step.handMoveIndex], live: true);
+  final cue = feet.isEmpty
+      ? hand
+      : '${feet.join(' ')} Then ${_lowerFirst(hand)}';
+  return crux ? 'Crux. $cue' : cue;
+}
+
+/// Live cue when the climber goes off-beta and mitbo replans.
+const newBetaCue = 'New beta from here.';
+
+/// Live cue when the climber matches the top hold.
+const sentCue = 'Nice send!';
+
+/// Live cue when the climber comes off the wall before sending.
+const offWallCue = 'Off the wall. Get back on the start holds to go again.';
+
+/// Live cue when the climber is back on the start holds, before the first
+/// step.
+const fromStartCue = 'From the start.';
 
 String _startCue(BetaPlan plan) {
   if (plan.startMatched) return 'Start matched on the start hold.';

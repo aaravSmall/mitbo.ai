@@ -213,7 +213,9 @@ const fallbackFrameHeightCm = 350.0;
 /// Pure geometry (no LLM): a [ReachModel] built from [profile] plus hold
 /// positions measured in centimeters. Hold coordinates are normalized to a
 /// frame [aspect] (width / height) wide. Scale comes from the climber's
-/// torso length at the start when visible.
+/// torso length at the start when visible, unless [scale] fixes it (e.g.
+/// when replanning mid-climb, so the wall keeps the scale it was first
+/// measured at).
 ///
 /// The sequence greedily moves the lower hand to the best reachable hold
 /// above it (closest to an ideal gain above the other hand, without
@@ -224,17 +226,18 @@ BetaPlan planBeta(
   StartPosition start, {
   required ClimberProfile profile,
   required double aspect,
+  ({double cmPerUnit, bool fromBody})? scale,
   int maxMoves = 40,
 }) {
   final warnings = <String>[];
   final reach = ReachModel(profile);
 
   // Scale: cm per image height.
-  var cmPerUnit = fallbackFrameHeightCm;
-  var scaleFromBody = false;
+  var cmPerUnit = scale?.cmPerUnit ?? fallbackFrameHeightCm;
+  var scaleFromBody = scale?.fromBody ?? false;
   final shoulders = start.shoulderCenter;
   final hips = start.hipCenter;
-  if (shoulders != null && hips != null) {
+  if (scale == null && shoulders != null && hips != null) {
     final dx = (shoulders.x - hips.x) * aspect;
     final dy = shoulders.y - hips.y;
     final torso = math.sqrt(dx * dx + dy * dy);
