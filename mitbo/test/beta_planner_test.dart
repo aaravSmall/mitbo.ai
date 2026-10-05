@@ -128,6 +128,13 @@ void main() {
       );
       expect(plan.moves.map((m) => m.kind), contains(MoveKind.bigReach));
       expect(plan.sends, isTrue);
+      // The big move is the crux, and the narration says so.
+      final big = plan.moves.indexWhere((m) => m.kind == MoveKind.bigReach);
+      expect(plan.cruxMove, big);
+      expect(plan.difficulties, hasLength(plan.moves.length));
+      final cues = betaCues(plan);
+      expect(cues.first, endsWith('The crux is move ${plan.cruxHandMove}.'));
+      expect(cues.where((c) => c.startsWith('Crux. Big move:')), hasLength(1));
     });
 
     test('a matched start uses one hold for both hands', () {
@@ -281,7 +288,10 @@ void main() {
         aspect: _aspect,
       );
       final cues = betaCues(plan);
-      expect(cues[0], "Here's the beta: ${plan.handMoveCount} hand moves.");
+      expect(
+        cues[0],
+        startsWith("Here's the beta: ${plan.handMoveCount} hand moves."),
+      );
       expect(
         cues[1],
         'Start with your left hand on the left start hold '

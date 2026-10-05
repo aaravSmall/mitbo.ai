@@ -4,6 +4,7 @@ import '../models/climber_keypoints.dart';
 import '../models/climber_profile.dart';
 import '../vision/problem_detector.dart';
 import '../vision/start_detector.dart';
+import 'crux.dart';
 
 /// A climber's limbs.
 enum Limb {
@@ -68,6 +69,7 @@ class BetaMove {
     this.otherHandHold,
     this.reachRatio = 0,
     this.toTop = false,
+    this.footY,
   });
 
   final Limb limb;
@@ -91,6 +93,10 @@ class BetaMove {
   /// The move lands on the top hold.
   final bool toTop;
 
+  /// For hand moves: height of the higher foot during the move, in wall
+  /// centimeters. Used to judge how stretched out the climber is.
+  final double? footY;
+
   double get dx => to.x - from.x;
   double get dy => to.y - from.y;
   double get distance => from.distanceTo(to);
@@ -107,6 +113,8 @@ class BetaPlan {
     required this.cmPerUnit,
     required this.scaleFromBody,
     this.warnings = const [],
+    this.difficulties = const [],
+    this.cruxMove,
   });
 
   /// Hold centers in wall centimeters, in the problem's hold order.
@@ -126,6 +134,32 @@ class BetaPlan {
   final bool scaleFromBody;
 
   final List<String> warnings;
+
+  /// [moveDifficulty] of each move in [moves] (same length, or empty).
+  final List<double> difficulties;
+
+  /// Index into [moves] of the crux, or null when no move stands out as
+  /// hard (see [findCrux]).
+  final int? cruxMove;
+
+  /// The crux as a 1-based hand move number (as numbered on the overlay
+  /// and in cues), or null.
+  int? get cruxHandMove {
+    final crux = cruxMove;
+    return crux == null ? null : handMoveNumber(crux);
+  }
+
+  /// 1-based number of the hand move at [moveIndex] among all hand moves,
+  /// or null if that move isn't a hand move.
+  int? handMoveNumber(int moveIndex) {
+    if (moveIndex < 0 || moveIndex >= moves.length) return null;
+    if (!moves[moveIndex].limb.isHand) return null;
+    var n = 0;
+    for (var i = 0; i <= moveIndex; i++) {
+      if (moves[i].limb.isHand) n++;
+    }
+    return n;
+  }
 
   bool get startMatched => leftStart == rightStart;
 
@@ -300,6 +334,7 @@ BetaPlan planBeta(
       otherHandHold: other,
       reachRatio: holds[target].distanceTo(holds[other]) / reach.maxSpan,
       toTop: target == top,
+      footY: math.max(leftFoot.y, rightFoot.y),
     );
   }
 
@@ -412,6 +447,7 @@ BetaPlan planBeta(
           otherHand: holds[top],
           otherHandHold: top,
           toTop: true,
+          footY: footY,
         ),
       );
       continue;
@@ -454,6 +490,7 @@ BetaPlan planBeta(
   if (!done() && moves.length >= maxMoves) {
     warnings.add('Stopped planning after $maxMoves moves');
   }
+  final difficulties = [for (final m in moves) moveDifficulty(m, reach)];
   return BetaPlan(
     holds: holds,
     leftStart: leftStart,
@@ -463,6 +500,8 @@ BetaPlan planBeta(
     cmPerUnit: cmPerUnit,
     scaleFromBody: scaleFromBody,
     warnings: warnings,
+    difficulties: difficulties,
+    cruxMove: findCrux(difficulties),
   );
 }
 

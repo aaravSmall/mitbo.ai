@@ -14,16 +14,24 @@ List<String> betaCues(BetaPlan plan) {
     if (hands == 0)
       "You're already on the top hold."
     else
-      "Here's the beta: $hands hand ${hands == 1 ? 'move' : 'moves'}.",
+      "Here's the beta: $hands hand ${hands == 1 ? 'move' : 'moves'}."
+          '${_cruxSentence(plan)}',
     _startCue(plan),
   ];
-  for (final move in plan.moves) {
+  for (var i = 0; i < plan.moves.length; i++) {
+    final move = plan.moves[i];
     // Smears are a planner detail (feet on blank wall); calling each one
     // out is noise.
     if (move.kind == MoveKind.smear) continue;
-    cues.add(moveCue(move));
+    cues.add(moveCue(move, crux: i == plan.cruxMove));
   }
   return cues;
+}
+
+/// " The crux is move 4." when the plan has a crux, else "".
+String _cruxSentence(BetaPlan plan) {
+  final crux = plan.cruxHandMove;
+  return crux == null ? '' : ' The crux is move $crux.';
 }
 
 String _startCue(BetaPlan plan) {
@@ -38,12 +46,21 @@ String _startCue(BetaPlan plan) {
       'and your right hand on the right.';
 }
 
-/// The spoken cue for one move.
-String moveCue(BetaMove move) {
+/// The spoken cue for one move. A [crux] move is announced as such.
+///
+/// With [live], cues are spoken as the climber goes, so the finishing
+/// match doesn't claim the send before it happens.
+String moveCue(BetaMove move, {bool crux = false, bool live = false}) {
+  final cue = _moveCue(move, live: live);
+  return crux ? 'Crux. $cue' : cue;
+}
+
+String _moveCue(BetaMove move, {required bool live}) {
   final side = move.limb.side;
   final otherSide = move.limb.isLeft ? 'right' : 'left';
   switch (move.kind) {
     case MoveKind.match:
+      if (live) return 'Match the top hold with your $side hand.';
       return 'Match the top hold with your $side hand. '
           "That's the send!";
     case MoveKind.footHold:
