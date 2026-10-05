@@ -1,13 +1,9 @@
-import 'dart:async';
-
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
-import '../models/captured_frame.dart';
 import '../models/climber_keypoints.dart';
-import 'frame_converter.dart';
 
 /// The most recent pose detection result, plus what's needed to map its
 /// landmark coordinates (which are in source-image space) onto the preview.
@@ -69,6 +65,7 @@ class PoseService {
 
   bool _busy = false;
   bool _disposed = false;
+  bool _paused = false;
 
   // The detection currently running, so a model switch can wait for it
   // before closing the detector it's running on.
@@ -76,9 +73,6 @@ class PoseService {
 
   // Bumped by [reset] so a detection already in flight is discarded.
   int _session = 0;
-
-  // A pending [captureNextFrame] request, served by the next frame.
-  Completer<CapturedFrame>? _capture;
 
   /// The pose model currently in use.
   PoseDetectionModel get model => _model;
@@ -104,7 +98,6 @@ class PoseService {
   ///
   /// iOS frames only need the sensor orientation; on Android the current
   /// device orientation has to be compensated for too.
-  @visibleForTesting
   static InputImageRotation? rotationFor(
     CameraDescription camera,
     DeviceOrientation deviceOrientation,
@@ -120,6 +113,25 @@ class PoseService {
         : (sensorOrientation - deviceDegrees + 360) % 360;
     return InputImageRotationValue.fromRawValue(degrees);
   }
+
+  /// Whether detection is paused (e.g. while the user marks holds). Frames
+  /// are ignored while paused; unpausing resets, so nothing stale from
+  /// before the pause is published.
+  bool get paused => _paused;
+  set paused(bool value) {
+    if (value == _paused) return;
+    _paused = value;
+    if (!value) reset();
+  }
+
+  /// Rotation of the space ML Kit reports landmark coordinates in, for a
+  /// frame whose upright [rotation] is as given. ML Kit ignores the rotation
+  /// on iOS (frames already arrive upright), so its coordinates are in the
+  /// raw image's space there.
+  static InputImageRotation coordinateRotation(InputImageRotation rotation) =>
+      defaultTargetPlatform == TargetPlatform.iOS
+      ? InputImageRotation.rotation0deg
+      : rotation;
 
   /// Wraps a single-plane nv21 (Android) or bgra8888 (iOS) frame for ML Kit.
   /// Returns null for any other format.
@@ -152,14 +164,11 @@ class PoseService {
     required CameraDescription camera,
     required DeviceOrientation deviceOrientation,
   }) async {
-    if (_disposed) return;
+    if (_busy || _disposed || _paused) return;
     final rotation = rotationFor(camera, deviceOrientation);
     if (rotation == null) return;
     final inputImage = inputImageFrom(image, rotation);
     if (inputImage == null) return;
-    // A capture shouldn't wait for detection to be free.
-    _serveCapture(image, rotation);
-    if (_busy) return;
 
     _busy = true;
     final session = _session;
@@ -170,7 +179,7 @@ class PoseService {
       if (_disposed || session != _session) return;
       final pose = poses.isEmpty ? null : poses.first;
       final imageSize = Size(image.width.toDouble(), image.height.toDouble());
-      final coordinateRotation = _coordinateRotation(rotation);
+      final coordinateRotation = PoseService.coordinateRotation(rotation);
       final raw = pose == null
           ? ClimberKeypoints.none
           : ClimberKeypoints.fromPose(
@@ -195,52 +204,6 @@ class PoseService {
         _busy = false;
       }
     }
-  }
-
-  /// Rotation from the raw image to the upright space landmark coordinates
-  /// are in. ML Kit ignores the rotation on iOS (frames already arrive
-  /// upright), so its coordinates are in the raw image's space there.
-  static InputImageRotation _coordinateRotation(InputImageRotation rotation) =>
-      defaultTargetPlatform == TargetPlatform.iOS
-      ? InputImageRotation.rotation0deg
-      : rotation;
-
-  /// Converts the next camera frame to an upright RGBA image, in the same
-  /// upright space as [PoseFrame] coordinates.
-  ///
-  /// Never completes if no frames arrive, so callers should add a timeout.
-  /// Fails if the service is reset or disposed first.
-  Future<CapturedFrame> captureNextFrame() {
-    if (_disposed) {
-      return Future.error(StateError('PoseService has been disposed'));
-    }
-    return (_capture ??= Completer<CapturedFrame>()).future;
-  }
-
-  void _serveCapture(CameraImage image, InputImageRotation rotation) {
-    final capture = _capture;
-    if (capture == null) return;
-    _capture = null;
-    final plane = image.planes.single;
-    final raw = RawFrame(
-      bytes: plane.bytes,
-      width: image.width,
-      height: image.height,
-      bytesPerRow: plane.bytesPerRow,
-      format: defaultTargetPlatform == TargetPlatform.iOS
-          ? RawFrameFormat.bgra8888
-          : RawFrameFormat.nv21,
-      rotationDegrees: _coordinateRotation(rotation).rawValue,
-    );
-    // Converting a full frame takes tens of milliseconds; keep it off the
-    // UI isolate.
-    capture.complete(compute(convertFrameToUpright, raw));
-  }
-
-  void _failCapture(String reason) {
-    final capture = _capture;
-    _capture = null;
-    capture?.completeError(StateError('Frame capture cancelled: $reason'));
   }
 
   /// Switches to the [model] pose model.
@@ -284,7 +247,6 @@ class PoseService {
   void reset() {
     if (_disposed) return;
     _session++;
-    _failCapture('pose tracking was reset');
     _smoother.reset();
     latest.value = null;
   }
@@ -293,7 +255,6 @@ class PoseService {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
-    _failCapture('pose tracking was disposed');
     latest.dispose();
     await _closeAfter(_detector, _inFlight);
   }

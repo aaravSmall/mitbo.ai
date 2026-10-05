@@ -5,10 +5,16 @@ import 'dart:ui';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:mitbo/holds/hold.dart';
+import 'package:mitbo/holds/hold_conversion.dart';
 import 'package:mitbo/holds/hold_detector.dart';
 import 'package:mitbo/holds/hold_geometry.dart';
 import 'package:mitbo/holds/problem.dart';
-import 'package:mitbo/models/captured_frame.dart';
+import 'package:mitbo/vision/hold_color.dart';
+import 'package:mitbo/vision/hold_segmenter.dart';
+import 'package:mitbo/vision/problem_detector.dart';
+import 'package:mitbo/vision/wall_frame.dart';
+
+import 'support/synthetic_wall.dart';
 
 Hold _hold(
   String id,
@@ -26,23 +32,18 @@ Hold _hold(
 );
 
 /// A [width] x [height] frame whose pixels are colored by [colorAt].
-CapturedFrame _frame(
-  int width,
-  int height,
-  Color Function(int x, int y) colorAt,
-) {
-  final rgba = Uint8List(width * height * 4);
+WallFrame _frame(int width, int height, Color Function(int x, int y) colorAt) {
+  final rgb = Uint8List(width * height * 3);
   for (var y = 0; y < height; y++) {
     for (var x = 0; x < width; x++) {
       final c = colorAt(x, y).toARGB32();
-      final i = (y * width + x) * 4;
-      rgba[i] = (c >> 16) & 0xff;
-      rgba[i + 1] = (c >> 8) & 0xff;
-      rgba[i + 2] = c & 0xff;
-      rgba[i + 3] = 255;
+      final i = (y * width + x) * 3;
+      rgb[i] = (c >> 16) & 0xff;
+      rgb[i + 1] = (c >> 8) & 0xff;
+      rgb[i + 2] = c & 0xff;
     }
   }
-  return CapturedFrame(width: width, height: height, rgba: rgba);
+  return WallFrame(width, height, rgb);
 }
 
 void main() {
@@ -289,9 +290,122 @@ void main() {
     expect(
       await const NoopHoldDetector().detect(
         frame,
-        targetColor: const Color(0xFFFF0000),
+        targetColor: const HoldColor(hue: 0, saturation: 1, value: 1),
       ),
       isEmpty,
     );
+  });
+
+  group('SegmentingHoldDetector', () {
+    test('finds the holds of the target color as auto holds', () async {
+      final wall = SyntheticWall(200, 300)
+        ..disc(40, 50, 10, wallRed)
+        ..disc(150, 200, 12, wallRed)
+        ..disc(100, 120, 10, wallBlue);
+      const red = HoldColor(hue: 0, saturation: 0.82, value: 0.86);
+
+      final holds = await const SegmentingHoldDetector().detect(
+        wall.frame,
+        targetColor: red,
+      );
+
+      expect(holds, hasLength(2));
+      expect(holds.every((h) => h.source == HoldSource.auto), isTrue);
+      expect(holds.map((h) => h.id).toSet(), hasLength(2));
+      // Sorted top to bottom, centered on the discs.
+      expect(holds[0].center.dx, closeTo(40.5 / 200, 0.01));
+      expect(holds[0].center.dy, closeTo(50.5 / 300, 0.01));
+      expect(holds[1].center.dx, closeTo(150.5 / 200, 0.01));
+      // Radius covers the disc: ~10px of a 200px shorter side.
+      expect(holds[0].radius, closeTo(10.5 / 200, 0.01));
+    });
+
+    test('finds nothing without a target color', () async {
+      final wall = SyntheticWall(50, 50)..disc(25, 25, 8, wallRed);
+      expect(await const SegmentingHoldDetector().detect(wall.frame), isEmpty);
+    });
+  });
+
+  group('conversion', () {
+    const frameSize = Size(200, 400);
+
+    test('a hold becomes a box around its circle and back', () {
+      final hold = _hold('a', 0.5, 0.25, radius: 0.1);
+      final detected = detectedFromHold(hold, frameSize);
+      // 0.1 of the 200px shorter side = 20px: 0.1 across, 0.05 down.
+      expect(detected.left, closeTo(0.4, 1e-9));
+      expect(detected.right, closeTo(0.6, 1e-9));
+      expect(detected.top, closeTo(0.2, 1e-9));
+      expect(detected.bottom, closeTo(0.3, 1e-9));
+      expect(detected.centerX, 0.5);
+      expect(detected.centerY, 0.25);
+
+      final back = holdFromDetected(detected, id: 'a', frameSize: frameSize);
+      expect(back.center, hold.center);
+      expect(back.radius, closeTo(hold.radius, 1e-9));
+      expect(back.source, HoldSource.auto);
+    });
+
+    test('a detected hold gets a circle covering its larger side', () {
+      const detected = DetectedHold(
+        left: 0.1,
+        top: 0.1,
+        right: 0.3, // 40px wide
+        bottom: 0.125, // 10px tall
+        centerX: 0.2,
+        centerY: 0.11,
+        pixelArea: 300,
+        areaFraction: 300 / 80000,
+        fillRatio: 0.75,
+      );
+      final hold = holdFromDetected(detected, id: 'x', frameSize: frameSize);
+      expect(hold.center, const Offset(0.2, 0.11));
+      expect(hold.radius, closeTo(20 / 200, 1e-9));
+    });
+
+    test('problemFromDetected keeps order, color and frame size', () {
+      const blue = HoldColor(hue: 230, saturation: 0.8, value: 0.85);
+      final problem = problemFromDetected(
+        DetectedProblem(
+          color: blue,
+          holds: [
+            detectedFromHold(_hold('a', 0.5, 0.2), frameSize),
+            detectedFromHold(_hold('b', 0.4, 0.7), frameSize),
+          ],
+          startHoldIndices: const [1],
+        ),
+        frameSize,
+      );
+      expect(problem.holds.map((h) => h.id), ['auto-0', 'auto-1']);
+      expect(problem.holds.map((h) => h.center.dy), [0.2, 0.7]);
+      expect(problem.frameSize, frameSize);
+      expect(problem.color, isNotNull);
+      expect(problem.holds.every((h) => h.color == problem.color), isTrue);
+    });
+
+    test('colors convert between display and HSV', () {
+      for (final color in const [
+        Color(0xFFDC2828),
+        Color(0xFF283CDC),
+        Color(0xFFE6D228),
+        Color(0xFF30A050),
+      ]) {
+        final hsv = holdColorFromColor(color);
+        expect(hsv.achromatic, isFalse);
+        final back = colorFromHoldColor(hsv).toARGB32();
+        for (final shift in [16, 8, 0]) {
+          expect(
+            (back >> shift) & 0xff,
+            closeTo((color.toARGB32() >> shift) & 0xff, 1),
+          );
+        }
+      }
+    });
+
+    test('grays and dark colors are achromatic', () {
+      expect(holdColorFromColor(const Color(0xFF808080)).achromatic, isTrue);
+      expect(holdColorFromColor(const Color(0xFFF0F0F0)).achromatic, isTrue);
+      expect(holdColorFromColor(const Color(0xFF100505)).achromatic, isTrue);
+    });
   });
 }

@@ -1,14 +1,17 @@
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
 import '../holds/hold.dart';
+import '../holds/hold_conversion.dart';
 import '../holds/hold_detector.dart';
 import '../holds/hold_geometry.dart';
 import '../holds/problem.dart';
-import '../models/captured_frame.dart';
-import '../widgets/holds_overlay.dart';
+import '../vision/hold_color.dart';
+import '../vision/hold_segmenter.dart';
+import '../vision/wall_frame.dart';
 import '../widgets/pose_mapping.dart';
 
 /// What the camera screen hands the hold marking screen.
@@ -17,31 +20,36 @@ class HoldMarkingArgs {
     required this.frame,
     required this.previewAspectRatio,
     this.initialProblem,
+    this.segmentationParams = const SegmentationParams(),
   });
 
-  /// The captured frame, upright.
-  final CapturedFrame frame;
+  /// The captured frame, upright (the same space pose keypoints use).
+  final WallFrame frame;
 
   /// Width / height of the live preview, so the frozen frame is fitted
   /// exactly the way the preview was.
   final double previewAspectRatio;
 
-  /// Holds to start from (e.g. when re-marking), if any.
+  /// Holds to start from (e.g. the automatically detected ones, to fix
+  /// up), if any.
   final Problem? initialProblem;
+
+  /// Color thresholds for "Pick problem color" and the hold detection it
+  /// runs — the automatic detector's current settings.
+  final SegmentationParams segmentationParams;
 }
 
 /// Lets the user mark a problem's holds on a frozen camera frame.
 ///
 /// Pops with the [Problem] on Done, or null on Cancel.
 class HoldMarkingScreen extends StatefulWidget {
-  const HoldMarkingScreen({
-    super.key,
-    required this.args,
-    this.detector = const NoopHoldDetector(),
-  });
+  const HoldMarkingScreen({super.key, required this.args, this.detector});
 
   final HoldMarkingArgs args;
-  final HoldDetector detector;
+
+  /// Finds more holds once a problem color is picked. Defaults to color
+  /// segmentation with [HoldMarkingArgs.segmentationParams].
+  final HoldDetector? detector;
 
   @override
   State<HoldMarkingScreen> createState() => _HoldMarkingScreenState();
@@ -54,7 +62,7 @@ class _HoldMarkingScreenState extends State<HoldMarkingScreen> {
   static const _minRadius = 0.01;
   static const _maxRadius = 0.25;
 
-  late final CapturedFrame _frame = widget.args.frame;
+  late final WallFrame _frame = widget.args.frame;
   late final Size _frameSize = Size(
     _frame.width.toDouble(),
     _frame.height.toDouble(),
@@ -87,7 +95,7 @@ class _HoldMarkingScreenState extends State<HoldMarkingScreen> {
       _problemColor = initial.color;
     }
     ui.decodeImageFromPixels(
-      _frame.rgba,
+      _rgbaOf(_frame),
       _frame.width,
       _frame.height,
       ui.PixelFormat.rgba8888,
@@ -105,6 +113,19 @@ class _HoldMarkingScreenState extends State<HoldMarkingScreen> {
   void dispose() {
     _image?.dispose();
     super.dispose();
+  }
+
+  /// [frame]'s pixels with an opaque alpha channel added, for display.
+  static Uint8List _rgbaOf(WallFrame frame) {
+    final rgb = frame.rgb;
+    final rgba = Uint8List(frame.width * frame.height * 4);
+    for (var i = 0, o = 0; i < rgb.length; i += 3, o += 4) {
+      rgba[o] = rgb[i];
+      rgba[o + 1] = rgb[i + 1];
+      rgba[o + 2] = rgb[i + 2];
+      rgba[o + 3] = 255;
+    }
+    return rgba;
   }
 
   Hold? get _selected {
@@ -231,11 +252,12 @@ class _HoldMarkingScreenState extends State<HoldMarkingScreen> {
   }
 
   Future<void> _pickColor(Hold hold) async {
-    final color = averageColorInCircle(_frame, hold.center, hold.radius);
-    if (color == null) {
+    final holdColor = _readHoldColor(hold);
+    if (holdColor == null) {
       _showMessage("Couldn't read a color there. Try a bigger circle.");
       return;
     }
+    final color = colorFromHoldColor(holdColor);
     setState(() {
       _replaceHold(hold.copyWith(color: color));
       _problemColor = color;
@@ -245,7 +267,10 @@ class _HoldMarkingScreenState extends State<HoldMarkingScreen> {
 
     List<Hold> found;
     try {
-      found = await widget.detector.detect(_frame, targetColor: color);
+      final detector =
+          widget.detector ??
+          SegmentingHoldDetector(params: widget.args.segmentationParams);
+      found = await detector.detect(_frame, targetColor: holdColor);
     } catch (e) {
       if (!mounted) return;
       setState(() => _detecting = false);
@@ -272,6 +297,28 @@ class _HoldMarkingScreenState extends State<HoldMarkingScreen> {
           ? 'No other holds found for this color yet. Tap to add them by hand.'
           : 'Added ${added.length} ${added.length == 1 ? 'hold' : 'holds'}.',
     );
+  }
+
+  /// The hold color inside [hold]'s circle. The automatic detector's
+  /// sampler weighs the dominant hue, which copes with wall showing around
+  /// the hold; a plain average is the fallback.
+  HoldColor? _readHoldColor(Hold hold) {
+    final shortSide = _frameSize.shortestSide;
+    final sampled = sampleHoldColor(
+      _frame,
+      hold.center.dx,
+      hold.center.dy,
+      radius: hold.radius * shortSide / _frameSize.width,
+      tolerance: widget.args.segmentationParams.tolerance,
+    );
+    if (sampled != null) return sampled;
+    final average = averageColorInCircle(_frame, hold.center, hold.radius);
+    return average == null
+        ? null
+        : holdColorFromColor(
+            average,
+            tolerance: widget.args.segmentationParams.tolerance,
+          );
   }
 
   void _done() {
@@ -344,7 +391,7 @@ class _HoldMarkingScreenState extends State<HoldMarkingScreen> {
                         child: ClipRect(
                           child: CustomPaint(
                             painter: _FramePainter(_image, _frameSize),
-                            foregroundPainter: HoldsPainter(
+                            foregroundPainter: _MarkedHoldsPainter(
                               holds: _holds,
                               frameSize: _frameSize,
                               color: _problemColor,
@@ -459,4 +506,75 @@ class _FramePainter extends CustomPainter {
   @override
   bool shouldRepaint(_FramePainter oldDelegate) =>
       oldDelegate.image != image || oldDelegate.frameSize != frameSize;
+}
+
+/// Paints the holds being marked, on a frame of [frameSize] (upright
+/// pixels), using the same mapping as the pose and hold overlays.
+class _MarkedHoldsPainter extends CustomPainter {
+  _MarkedHoldsPainter({
+    required this.holds,
+    required this.frameSize,
+    this.color,
+    this.selectedId,
+  });
+
+  final List<Hold> holds;
+  final Size frameSize;
+
+  /// The problem color; holds are outlined in white until one is picked.
+  final Color? color;
+
+  /// Highlighted hold (on the marking screen).
+  final String? selectedId;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (holds.isEmpty || size.isEmpty) return;
+    // Holds marked in one orientation don't match a preview in the other.
+    if ((frameSize.width > frameSize.height) != (size.width > size.height)) {
+      return;
+    }
+    final transform = PreviewTransform(
+      uprightSize: frameSize,
+      previewSize: size,
+    );
+    final shadow = Paint()
+      ..color = Colors.black54
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4.5;
+
+    for (final hold in holds) {
+      final center = normalizedToPreview(
+        hold.center,
+        imageSize: frameSize,
+        rotation: InputImageRotation.rotation0deg,
+        previewSize: size,
+      );
+      final radius = holdRadiusPixels(hold.radius, frameSize) * transform.scale;
+      final selected = hold.id == selectedId;
+      final outline = Paint()
+        ..color = color ?? Colors.white
+        ..style = PaintingStyle.stroke
+        // Auto-detected holds are drawn lighter than ones the user marked.
+        ..strokeWidth = hold.source == HoldSource.manual ? 2.5 : 1.5;
+
+      if (selected) {
+        canvas.drawCircle(
+          center,
+          radius,
+          Paint()..color = (color ?? Colors.white).withValues(alpha: 0.25),
+        );
+        outline.strokeWidth = 3.5;
+      }
+      canvas.drawCircle(center, radius, shadow);
+      canvas.drawCircle(center, radius, outline);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_MarkedHoldsPainter oldDelegate) =>
+      oldDelegate.holds != holds ||
+      oldDelegate.frameSize != frameSize ||
+      oldDelegate.color != color ||
+      oldDelegate.selectedId != selectedId;
 }

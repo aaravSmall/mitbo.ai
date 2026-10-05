@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:isolate';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -5,12 +8,22 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../holds/hold_conversion.dart';
 import '../holds/problem.dart';
+import '../services/beta_narrator.dart';
+import '../services/frame_grabber.dart';
 import '../services/pose_service.dart';
-import '../widgets/holds_overlay.dart';
+import '../state/climb_coach.dart';
+import '../state/problem_session.dart';
+import '../state/profile_controller.dart';
+import '../vision/hold_segmenter.dart';
+import '../vision/wall_frame.dart';
+import '../widgets/hold_overlay.dart';
 import '../widgets/pose_debug_chip.dart';
 import '../widgets/pose_debug_sheet.dart';
 import '../widgets/pose_overlay.dart';
+import '../widgets/problem_debug_panel.dart';
+import '../widgets/problem_status_pill.dart';
 import 'hold_marking_screen.dart';
 
 enum _CameraStatus {
@@ -25,12 +38,26 @@ enum _CameraStatus {
 }
 
 /// Shows a live back-camera preview once camera permission is granted, and
-/// runs pose tracking on the camera's image stream.
+/// runs pose tracking and automatic problem detection on the camera's image
+/// stream.
 ///
-/// Draws the detected skeleton over the preview. Debug builds add a bug icon
-/// in the app bar for a pose readout and live tuning.
+/// Draws the detected skeleton and the problem's holds (numbered in beta
+/// order, next hold ringed) over the preview, with a status pill for
+/// detection and climb progress. Automatically detected holds are shown for
+/// the user to confirm; if they're wrong, or detection fails, the holds can
+/// be marked by hand on a frozen frame. Once a problem locks, a [ClimbCoach]
+/// speaks the beta with on-device text-to-speech: move by move as the
+/// climber climbs (live cues), or all at once (full beta), toggled from
+/// the app bar. Debug builds add a bug icon in the app bar for a
+/// pose/holds readout and live tuning.
 class CameraScreen extends StatefulWidget {
-  const CameraScreen({super.key});
+  const CameraScreen({super.key, this.profileController, this.narrator});
+
+  /// Source of the climber's height and wingspan for the beta.
+  final ProfileController? profileController;
+
+  /// Speaks the beta; defaults to the device's TTS. Injectable for tests.
+  final BetaNarrator? narrator;
 
   @override
   State<CameraScreen> createState() => _CameraScreenState();
@@ -42,6 +69,17 @@ class _CameraScreenState extends State<CameraScreen>
   CameraController? _controller;
   String? _errorMessage;
   final PoseService _poseService = PoseService();
+  final FrameGrabber _frameGrabber = FrameGrabber();
+
+  // Sharper snapshots than the wall reference, for marking holds by hand.
+  final FrameGrabber _markingGrabber = FrameGrabber(
+    convert: (raw) =>
+        Isolate.run(() => raw.toWallFrame(targetWidth: _markingFrameWidth)),
+  );
+  static const _markingFrameWidth = 720;
+  late final ProblemSession _problemSession;
+  late final BetaNarrator _narrator = widget.narrator ?? BetaNarrator();
+  late final ClimbCoach _coach;
 
   // Bumped whenever the camera is stopped, so an in-flight _startCamera can
   // tell it's been superseded and dispose what it created instead.
@@ -51,14 +89,12 @@ class _CameraScreenState extends State<CameraScreen>
   // so it should be restarted on resume.
   bool _suspended = false;
 
-  // The marked problem, drawn under the skeleton. Not persisted yet.
-  Problem? _problem;
-
-  // True from tapping "Mark holds" until the marking screen closes.
+  // True from asking to mark holds until the marking screen closes.
   bool _markingHolds = false;
 
-  // True only while the marking screen is open. The camera is stopped then
-  // and restarted when it closes, so resuming the app mustn't restart it.
+  // True only while the marking screen is open. Pose detection is paused
+  // then (the camera keeps running so the problem isn't lost), and resuming
+  // the app mustn't restart the camera underneath it.
   bool _holdScreenOpen = false;
 
   // Debug builds only (the toggle is hidden otherwise).
@@ -68,6 +104,17 @@ class _CameraScreenState extends State<CameraScreen>
   @override
   void initState() {
     super.initState();
+    _problemSession = ProblemSession(
+      frames: _poseService.latest,
+      grabFrame: _frameGrabber.grabNext,
+      profile: () => widget.profileController?.profile,
+    );
+    _coach = ClimbCoach(
+      session: _problemSession,
+      frames: _poseService.latest,
+      narrator: _narrator,
+      profile: () => widget.profileController?.profile,
+    );
     WidgetsBinding.instance.addObserver(this);
     _bootstrap();
   }
@@ -75,6 +122,18 @@ class _CameraScreenState extends State<CameraScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // Stop listening to poses before the pose service (and its notifier)
+    // goes away below. The coach listens to the session, so it goes first.
+    _coach.dispose();
+    _problemSession.dispose();
+    _frameGrabber.dispose();
+    _markingGrabber.dispose();
+    // Only dispose a narrator this screen created.
+    if (widget.narrator == null) {
+      _narrator.dispose();
+    } else {
+      _narrator.stop();
+    }
     // Stop the stream before closing the detector so no frame reaches it
     // after it's closed.
     _stopCamera().whenComplete(_poseService.dispose);
@@ -91,6 +150,7 @@ class _CameraScreenState extends State<CameraScreen>
         return;
       }
       _suspended = true;
+      _narrator.stop();
       _stopCamera();
       setState(() => _status = _CameraStatus.checking);
       return;
@@ -161,6 +221,9 @@ class _CameraScreenState extends State<CameraScreen>
   /// rebuild so the preview isn't left pointing at a disposed controller.
   Future<void> _stopCamera() async {
     _cameraGeneration++;
+    // A wall snapshot requested from this camera will never arrive.
+    _frameGrabber.cancel();
+    _markingGrabber.cancel();
     final controller = _controller;
     _controller = null;
     if (controller == null) return;
@@ -184,6 +247,8 @@ class _CameraScreenState extends State<CameraScreen>
     if (!mounted) return;
     // Don't let the last pose or its smoothing carry over into a new session.
     _poseService.reset();
+    // The phone may have moved: rescan the wall.
+    _problemSession.restart();
     final generation = _cameraGeneration;
     bool superseded() => !mounted || generation != _cameraGeneration;
 
@@ -214,13 +279,24 @@ class _CameraScreenState extends State<CameraScreen>
         await newController.dispose();
         return;
       }
-      await newController.startImageStream(
-        (image) => _poseService.processCameraImage(
+      await newController.startImageStream((image) {
+        final deviceOrientation = newController.value.deviceOrientation;
+        _poseService.processCameraImage(
           image,
           camera: backCamera,
-          deviceOrientation: newController.value.deviceOrientation,
-        ),
-      );
+          deviceOrientation: deviceOrientation,
+        );
+        _frameGrabber.onCameraImage(
+          image,
+          camera: backCamera,
+          deviceOrientation: deviceOrientation,
+        );
+        _markingGrabber.onCameraImage(
+          image,
+          camera: backCamera,
+          deviceOrientation: deviceOrientation,
+        );
+      });
       if (superseded()) {
         await newController.stopImageStream();
         await newController.dispose();
@@ -243,55 +319,71 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  /// Freezes the current frame and opens the hold marking screen on it.
-  ///
-  /// The camera (and so pose detection) is stopped while marking, the same
-  /// way it is when the app is backgrounded, and restarted on return.
+  /// Opens the hold marking screen on a frozen frame: pre-filled with the
+  /// current (e.g. automatically detected) holds to fix, or empty as a
+  /// fallback when detection failed. The result replaces the problem.
   Future<void> _markHolds() async {
     final controller = _controller;
     if (controller == null || _status != _CameraStatus.ready) return;
     if (_markingHolds) return;
     setState(() => _markingHolds = true);
+    _narrator.stop();
 
     final previewAspectRatio = _previewAspectRatio(controller);
-    final HoldMarkingArgs args;
+    final current = _problemSession.problem;
+    final currentSize = _problemSession.problemImageSize;
+    final initial = current == null || currentSize == null
+        ? null
+        : problemFromDetected(current, currentSize);
+
+    WallFrame? frame;
     try {
-      final frame = await _poseService.captureNextFrame().timeout(
+      frame = await _markingGrabber.grabNext().timeout(
         const Duration(seconds: 3),
       );
-      args = HoldMarkingArgs(
-        frame: frame,
-        previewAspectRatio: previewAspectRatio,
-        initialProblem: _problem,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _markingHolds = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't capture a frame. Try again.")),
-      );
-      return;
+    } on TimeoutException {
+      _markingGrabber.cancel();
     }
-    // The camera may have been stopped (e.g. backgrounded) meanwhile.
-    if (!mounted || _controller != controller) {
-      if (mounted) setState(() => _markingHolds = false);
+    // The clean wall snapshot detection uses is a blurrier fallback.
+    frame ??= _problemSession.reference;
+    if (!mounted) return;
+    if (frame == null || _controller != controller) {
+      setState(() => _markingHolds = false);
+      if (frame == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Couldn't capture the wall. Try again."),
+          ),
+        );
+      }
       return;
     }
 
-    _stopCamera();
-    setState(() {
-      _status = _CameraStatus.checking;
-      _holdScreenOpen = true;
-    });
-    final result = await context.push<Problem>('/hold-marking', extra: args);
+    _poseService.paused = true;
+    setState(() => _holdScreenOpen = true);
+    final result = await context.push<Problem>(
+      '/hold-marking',
+      extra: HoldMarkingArgs(
+        frame: frame,
+        previewAspectRatio: previewAspectRatio,
+        initialProblem: initial,
+        segmentationParams: _problemSession.params,
+      ),
+    );
     if (!mounted) return;
+    _poseService.paused = false;
     setState(() {
       _holdScreenOpen = false;
       _markingHolds = false;
-      if (result != null) _problem = result;
     });
-    // Restarts the camera; _startCamera resets pose tracking.
-    _bootstrap();
+    // If the app was backgrounded meanwhile, the camera is off. Restarting
+    // it clears the problem, so do that before applying the marked holds.
+    if (_suspended) {
+      _suspended = false;
+      await _bootstrap();
+      if (!mounted) return;
+    }
+    if (result != null) _problemSession.applyManualProblem(result);
   }
 
   /// Width / height of the box [CameraPreview] lays itself out in, which
@@ -308,6 +400,14 @@ class _CameraScreenState extends State<CameraScreen>
     return landscape ? value.aspectRatio : 1 / value.aspectRatio;
   }
 
+  void _toggleCueMode() {
+    setState(() {
+      _coach.mode = _coach.mode == CueMode.live
+          ? CueMode.upfront
+          : CueMode.live;
+    });
+  }
+
   void _applyDebugSettings(PoseDebugSettings settings) {
     if (!mounted) return;
     if (settings.model != _poseService.model) {
@@ -316,6 +416,16 @@ class _CameraScreenState extends State<CameraScreen>
     _poseService
       ..alpha = settings.alpha
       ..handNudge = settings.handNudge;
+    final tolerance = _problemSession.params.tolerance;
+    if (settings.hueTolerance != tolerance.hueTolerance ||
+        settings.minSaturation != tolerance.minSaturation) {
+      _problemSession.params = SegmentationParams(
+        tolerance: tolerance.copyWith(
+          hueTolerance: settings.hueTolerance,
+          minSaturation: settings.minSaturation,
+        ),
+      );
+    }
     setState(() => _debugSettings = settings);
   }
 
@@ -325,6 +435,17 @@ class _CameraScreenState extends State<CameraScreen>
       appBar: AppBar(
         title: const Text('Camera'),
         actions: [
+          IconButton(
+            icon: Icon(
+              _coach.mode == CueMode.live
+                  ? Icons.record_voice_over
+                  : Icons.format_list_numbered,
+            ),
+            tooltip: _coach.mode == CueMode.live
+                ? 'Live cues on (tap for full beta)'
+                : 'Full beta on (tap for live cues)',
+            onPressed: _toggleCueMode,
+          ),
           if (kDebugMode)
             IconButton(
               icon: Icon(
@@ -403,8 +524,7 @@ class _CameraScreenState extends State<CameraScreen>
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    if (_problem case final problem?)
-                      HoldsOverlay(problem: problem),
+                    HoldOverlay(session: _problemSession, coach: _coach),
                     PoseOverlay(
                       frames: _poseService.latest,
                       showKeypoints:
@@ -420,28 +540,32 @@ class _CameraScreenState extends State<CameraScreen>
               left: 16,
               right: 16,
               bottom: 16,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  FilledButton.icon(
-                    icon: _markingHolds
-                        ? const SizedBox.square(
-                            dimension: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.touch_app_outlined),
-                    label: Text(_problem == null ? 'Mark holds' : 'Edit holds'),
-                    onPressed: _markingHolds ? null : _markHolds,
+              child: Center(
+                child: ListenableBuilder(
+                  listenable: Listenable.merge([
+                    _problemSession,
+                    _coach,
+                    _narrator,
+                  ]),
+                  builder: (context, _) => ProblemStatusPill(
+                    phase: _problemSession.phase,
+                    problem: _problemSession.problem,
+                    beta: _coach.plan,
+                    failureReason: _problemSession.failureReason,
+                    speaking: _narrator.speaking,
+                    onReset: _problemSession.resetProblem,
+                    onConfirm: _problemSession.confirmProblem,
+                    onMarkHolds: _markingHolds ? null : _markHolds,
+                    onReplay: _coach.replay,
+                    onStopSpeaking: _narrator.stop,
+                    climbState: _coach.state,
+                    movesDone: _coach.movesDone,
+                    totalMoves: _coach.state == null ? null : _coach.totalMoves,
+                    replayTooltip: _coach.mode == CueMode.live
+                        ? 'Repeat cue'
+                        : 'Replay beta',
                   ),
-                  if (_problem != null) ...[
-                    const SizedBox(width: 12),
-                    FilledButton.tonalIcon(
-                      icon: const Icon(Icons.clear),
-                      label: const Text('Clear holds'),
-                      onPressed: () => setState(() => _problem = null),
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
             // kDebugMode first so release builds compile the chip out.
@@ -457,6 +581,16 @@ class _CameraScreenState extends State<CameraScreen>
                     settings: _debugSettings,
                     onChanged: _applyDebugSettings,
                   ),
+                ),
+              ),
+            if (kDebugMode && _showPoseDebug)
+              Positioned(
+                right: 12,
+                top: 12,
+                child: ProblemDebugPanel(
+                  session: _problemSession,
+                  refresh: _poseService.latest,
+                  showReference: _debugSettings.showWallReference,
                 ),
               ),
           ],

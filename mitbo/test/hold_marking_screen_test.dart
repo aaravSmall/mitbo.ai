@@ -6,33 +6,33 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mitbo/holds/hold.dart';
 import 'package:mitbo/holds/hold_detector.dart';
 import 'package:mitbo/holds/problem.dart';
-import 'package:mitbo/models/captured_frame.dart';
 import 'package:mitbo/screens/hold_marking_screen.dart';
+import 'package:mitbo/vision/hold_color.dart';
+import 'package:mitbo/vision/wall_frame.dart';
 
 const _wallColor = Color(0xFFC81E28);
 
 /// A 60x80 frame of solid [_wallColor].
-CapturedFrame _solidFrame() {
+WallFrame _solidFrame() {
   const width = 60, height = 80;
-  final rgba = Uint8List(width * height * 4);
-  for (var i = 0; i < rgba.length; i += 4) {
-    rgba
+  final rgb = Uint8List(width * height * 3);
+  for (var i = 0; i < rgb.length; i += 3) {
+    rgb
       ..[i] = 0xC8
       ..[i + 1] = 0x1E
-      ..[i + 2] = 0x28
-      ..[i + 3] = 255;
+      ..[i + 2] = 0x28;
   }
-  return CapturedFrame(width: width, height: height, rgba: rgba);
+  return WallFrame(width, height, rgb);
 }
 
 class _FakeDetector implements HoldDetector {
   _FakeDetector(this.result);
 
   final List<Hold> result;
-  final calls = <Color?>[];
+  final calls = <HoldColor?>[];
 
   @override
-  Future<List<Hold>> detect(CapturedFrame image, {Color? targetColor}) async {
+  Future<List<Hold>> detect(WallFrame image, {HoldColor? targetColor}) async {
     calls.add(targetColor);
     return result;
   }
@@ -70,6 +70,16 @@ Future<List<Object?>> _open(WidgetTester tester, HoldDetector detector) async {
 }
 
 final _canvas = find.byKey(const Key('hold-canvas'));
+
+/// Within a couple of levels per channel (HSV round-trips aren't exact).
+void _expectNear(Color actual, Color expected) {
+  for (final shift in [16, 8, 0]) {
+    expect(
+      (actual.toARGB32() >> shift) & 0xff,
+      closeTo((expected.toARGB32() >> shift) & 0xff, 3),
+    );
+  }
+}
 
 void main() {
   testWidgets('add and delete a hold, then pick a color and get detected '
@@ -112,7 +122,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(detector.calls, hasLength(1));
-    expect(detector.calls.single?.toARGB32(), _wallColor.toARGB32());
+    final picked = detector.calls.single!;
+    final expected = rgbToHsv(0xC8, 0x1E, 0x28);
+    expect(picked.achromatic, isFalse);
+    expect(hueDistance(picked.hue, expected.h), lessThan(2));
     expect(find.text('3 holds'), findsOneWidget);
     expect(find.text('Added 2 holds.'), findsOneWidget);
     expect(find.byTooltip('Problem color'), findsOneWidget);
@@ -121,13 +134,13 @@ void main() {
     await tester.pumpAndSettle();
     final problem = results.single! as Problem;
     expect(problem.holds, hasLength(3));
-    expect(problem.color?.toARGB32(), _wallColor.toARGB32());
+    _expectNear(problem.color!, _wallColor);
     expect(problem.frameSize, const Size(60, 80));
     final manual = problem.holds.first;
     expect(manual.source, HoldSource.manual);
     expect(manual.center.dx, closeTo(0.5, 0.01));
     expect(manual.center.dy, closeTo(0.5, 0.01));
-    expect(manual.color?.toARGB32(), _wallColor.toARGB32());
+    _expectNear(manual.color!, _wallColor);
     expect(problem.holds.skip(1).map((h) => h.id), ['auto-1', 'auto-2']);
   });
 

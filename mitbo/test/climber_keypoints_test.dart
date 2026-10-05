@@ -153,6 +153,23 @@ void main() {
     });
   });
 
+  group('shoulderCenter', () {
+    test('is the midpoint of the shoulders, with the lower confidence', () {
+      final keypoints = _keypoints({
+        PoseLandmarkType.leftShoulder: (40, 30, 0.8),
+        PoseLandmarkType.rightShoulder: (60, 34, 0.9),
+      });
+      expect(keypoints.shoulderCenter, _at(0.5, 0.32, 0.8));
+    });
+
+    test('is null if a shoulder is hidden', () {
+      final keypoints = _keypoints({
+        PoseLandmarkType.leftShoulder: (40, 30, 0.8),
+      });
+      expect(keypoints.shoulderCenter, isNull);
+    });
+  });
+
   test('likelihood exactly at the threshold counts as visible', () {
     final keypoints = _keypoints({
       PoseLandmarkType.leftWrist: (10, 10, minLandmarkLikelihood),

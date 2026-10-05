@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
-import '../models/captured_frame.dart';
+import '../vision/wall_frame.dart';
 import 'hold.dart';
 
 /// Hold radius in upright frame pixels.
@@ -40,7 +40,7 @@ Hold? hitTestHolds(
 
 /// Average color of the pixels inside a circle at [center] (normalized)
 /// with [radius] (shorter-side units), or null if it covers no pixels.
-Color? averageColorInCircle(CapturedFrame frame, Offset center, double radius) {
+Color? averageColorInCircle(WallFrame frame, Offset center, double radius) {
   final cx = center.dx * frame.width;
   final cy = center.dy * frame.height;
   final r = radius * math.min(frame.width, frame.height);
@@ -56,10 +56,10 @@ Color? averageColorInCircle(CapturedFrame frame, Offset center, double radius) {
       final dx = x + 0.5 - cx;
       final dy = y + 0.5 - cy;
       if (dx * dx + dy * dy > r * r) continue;
-      final i = (y * frame.width + x) * 4;
-      red += frame.rgba[i];
-      green += frame.rgba[i + 1];
-      blue += frame.rgba[i + 2];
+      final i = (y * frame.width + x) * 3;
+      red += frame.rgb[i];
+      green += frame.rgb[i + 1];
+      blue += frame.rgb[i + 2];
       count++;
     }
   }
