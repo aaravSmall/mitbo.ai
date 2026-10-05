@@ -62,8 +62,12 @@ final _plan = BetaPlan(
 
 /// Feeds poses every 100 ms and collects the events.
 class _Climber {
-  _Climber([BetaPlan? plan])
-    : tracker = BetaTracker(problem: _problem, plan: plan ?? _plan);
+  _Climber({BetaPlan? plan, bool waitForStart = false})
+    : tracker = BetaTracker(
+        problem: _problem,
+        plan: plan ?? _plan,
+        waitForStart: waitForStart,
+      );
 
   final BetaTracker tracker;
   int _ms = 0;
@@ -124,6 +128,21 @@ void main() {
       expect(events.single, isA<ClimbSent>());
       expect(c.tracker.state, ClimbState.sent);
       expect(c.tracker.currentStep, isNull);
+    });
+
+    test('can wait for the climber to get on the start first', () {
+      final c = _Climber(waitForStart: true);
+      expect(c.tracker.state, ClimbState.waitingForStart);
+      expect(c.tracker.nextStep, 0);
+      // Away from the wall: no off-wall event, no moves.
+      expect(c.hold(null, null, ms: 3000), isEmpty);
+      expect(c.hold((0.4, 0.9), (0.6, 0.9), ms: 1500), isEmpty);
+      expect(c.hold(_h1, _rightStart), isEmpty);
+
+      final events = c.hold(_leftStart, _rightStart, ms: 1100);
+      expect((events.single as BackOnStart).first, isTrue);
+      expect(c.tracker.state, ClimbState.climbing);
+      expect(c.hold(_h1, _rightStart, ms: 500).single, isA<StepCompleted>());
     });
 
     test('a hand brushing past its target does not count', () {
@@ -212,7 +231,7 @@ void main() {
       // Hands somewhere else don't restart it.
       expect(c.hold(_h1, _h2, ms: 1500), isEmpty);
       events = c.hold(_leftStart, _rightStart, ms: 1100);
-      expect(events.single, isA<BackOnStart>());
+      expect((events.single as BackOnStart).first, isFalse);
       expect(c.tracker.state, ClimbState.climbing);
     });
 

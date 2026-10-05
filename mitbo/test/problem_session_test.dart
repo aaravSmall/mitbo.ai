@@ -152,10 +152,13 @@ void main() {
       expect(h.session.isManual, isFalse);
       expect(h.session.beta, isNull);
 
+      expect(h.session.lockedByTap, isFalse);
       h.session.confirmProblem();
       expect(h.session.phase, ProblemPhase.locked);
       // The beta is planned as soon as the problem locks.
       expect(h.session.beta, isNotNull);
+      // Confirmed on the phone: coaching waits for the climber.
+      expect(h.session.lockedByTap, isTrue);
       expect(h.session.beta!.holds, hasLength(_redProblem.holds.length));
       expect(phases, [
         ProblemPhase.ready,
@@ -210,6 +213,7 @@ void main() {
         expect(problem.color, same(_redProblem.color));
         expect(h.session.problemImageSize, const Size(100, 200));
         expect(h.session.beta, isNotNull);
+        expect(h.session.lockedByTap, isTrue);
         expect(h.detections, hasLength(1), reason: 'no re-detection');
       },
     );
@@ -249,6 +253,8 @@ void main() {
       expect(h.session.phase, ProblemPhase.locked);
       expect(h.session.problem!.startHoldIndices, unorderedEquals([1, 2]));
       expect(h.session.beta, isNotNull);
+      // Planned from the climber settling on the start: coach right away.
+      expect(h.session.lockedByTap, isFalse);
       expect(h.detections, isEmpty);
     });
 
@@ -447,6 +453,10 @@ void main() {
         'Get back on the start holds to go again',
       );
       expect(text(ClimbState.replanning), 'Working out new beta…');
+      expect(
+        text(ClimbState.waitingForStart),
+        'Get on the start holds to begin',
+      );
     });
 
     testWidgets('pill offers reset only once locked or failed', (tester) async {

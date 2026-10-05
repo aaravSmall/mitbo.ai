@@ -144,10 +144,14 @@ class ClimbCoach extends ChangeNotifier {
       }
       return;
     }
+    // Planned from a tap on the phone: the climber walked over to it, so
+    // wait for them to get on the start before cueing the first move.
+    final waitForStart = _session.lockedByTap;
     final tracker = _tracker = BetaTracker(
       problem: problem,
       plan: beta,
       params: _trackerParams,
+      waitForStart: waitForStart,
     );
     switch (_mode) {
       case CueMode.upfront:
@@ -160,7 +164,7 @@ class ClimbCoach extends ChangeNotifier {
                 ? null
                 : problem.color.name,
           ),
-          ..._currentStepCue(tracker),
+          if (waitForStart) getOnStartCue else ..._currentStepCue(tracker),
         ]);
     }
     notifyListeners();
@@ -186,8 +190,10 @@ class ClimbCoach extends ChangeNotifier {
         }
       case OffWall(:final afterSend):
         if (live && !afterSend) _say(const [offWallCue]);
-      case BackOnStart():
-        if (live) _say([fromStartCue, ..._currentStepCue(tracker)]);
+      case BackOnStart(:final first):
+        if (live) {
+          _say([if (!first) fromStartCue, ..._currentStepCue(tracker)]);
+        }
     }
     notifyListeners();
   }

@@ -126,8 +126,9 @@ class _Rig {
   }
 
   /// Scans the wall, settles on the start holds until the problem is
-  /// found, then confirms the holds so it locks.
-  Future<void> lock() async {
+  /// found, confirms the holds so it locks, then (unless [getOn] is false)
+  /// gets back on the start holds so the coaching begins.
+  Future<void> lock({bool getOn = true}) async {
     left = null;
     right = null;
     hold(ms: 1100);
@@ -143,6 +144,12 @@ class _Rig {
     session.confirmProblem();
     await _flush();
     expect(session.phase, ProblemPhase.locked);
+    expect(coach.state, ClimbState.waitingForStart);
+    if (!getOn) return;
+    left = _leftStart;
+    right = _rightStart;
+    hold(ms: 1100);
+    expect(coach.state, ClimbState.climbing);
   }
 
   /// Puts the hand for the current step on its target hold.
@@ -161,7 +168,38 @@ class _Rig {
 
 void main() {
   group('ClimbCoach', () {
-    test('live: intro and first move on lock, then a cue per move', () async {
+    test('after confirming on the phone, waits for the start', () async {
+      final rig = _Rig();
+      await rig.lock(getOn: false);
+      final coach = rig.coach;
+      final plan = coach.plan!;
+      // Intro, then "get on" — no move yet: the climber is at the phone.
+      expect(rig.narrator.said, hasLength(1));
+      expect(rig.narrator.said.single[0], startsWith('Got the red problem: '));
+      expect(rig.narrator.said.single[1], getOnStartCue);
+      expect(coach.nextTargetHold, isNull);
+
+      // Walking back to the wall (hands out of sight, then low) isn't
+      // "coming off the wall".
+      rig.left = null;
+      rig.right = null;
+      rig.hold(ms: 3000);
+      rig.left = (0.4, 0.9);
+      rig.right = (0.6, 0.9);
+      rig.hold(ms: 1500);
+      expect(coach.state, ClimbState.waitingForStart);
+      expect(rig.narrator.said, hasLength(1));
+
+      // On the start: the first move, without "From the start".
+      rig.left = _leftStart;
+      rig.right = _rightStart;
+      rig.hold(ms: 1100);
+      expect(coach.state, ClimbState.climbing);
+      expect(rig.narrator.said.last, [stepCue(plan, coach.currentStep!)]);
+      expect(coach.nextTargetHold, isNotNull);
+    });
+
+    test('live: one cue per move after getting on, then the send', () async {
       final rig = _Rig();
       expect(rig.coach.state, isNull);
       await rig.lock();
@@ -169,13 +207,9 @@ void main() {
       final coach = rig.coach;
       final plan = coach.plan!;
       expect(plan, same(rig.session.beta));
-      expect(coach.state, ClimbState.climbing);
       expect(coach.totalMoves, plan.handMoveCount);
-      expect(rig.narrator.said, hasLength(1));
-      final first = rig.narrator.said.single;
-      expect(first[0], startsWith('Got the red problem: '));
-      expect(first[1], stepCue(plan, coach.currentStep!));
-      expect(coach.nextTargetHold, isNotNull);
+      expect(rig.narrator.said, hasLength(2));
+      expect(rig.narrator.said[1], [stepCue(plan, coach.currentStep!)]);
 
       for (var guard = 0; guard < 20; guard++) {
         if (coach.state != ClimbState.climbing) break;
@@ -184,8 +218,8 @@ void main() {
       expect(coach.state, ClimbState.sent);
       expect(coach.movesDone, coach.totalMoves);
       expect(coach.nextTargetHold, isNull);
-      // Intro, one cue per remaining move, then the send.
-      expect(rig.narrator.said, hasLength(coach.totalMoves + 1));
+      // Intro, one cue per move, then the send.
+      expect(rig.narrator.said, hasLength(coach.totalMoves + 2));
       expect(rig.narrator.said.last, [sentCue]);
     });
 

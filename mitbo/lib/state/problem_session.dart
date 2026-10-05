@@ -114,6 +114,10 @@ class ProblemSession extends ChangeNotifier {
   // True when the current problem's holds were marked by hand.
   bool _manual = false;
 
+  // True when the beta was planned from a tap on the phone rather than
+  // from the climber settling on the start.
+  bool _lockedByTap = false;
+
   // Bumped whenever in-flight async work (grabs, detections) should be
   // discarded: restart, reset, a newer detection.
   int _generation = 0;
@@ -130,6 +134,12 @@ class ProblemSession extends ChangeNotifier {
 
   /// The planned beta for [problem], when [phase] is [ProblemPhase.locked].
   BetaPlan? get beta => _beta;
+
+  /// True when [beta] was planned from a tap on the phone (confirming the
+  /// detected holds, or finishing a fix) rather than from the climber
+  /// settling on the start holds. The climber walked over to the phone to
+  /// tap, so coaching should wait for them to get back on the start.
+  bool get lockedByTap => _lockedByTap && _beta != null;
 
   /// Why detection failed, when [phase] is [ProblemPhase.failed].
   String? get failureReason => _failureReason;
@@ -177,7 +187,7 @@ class ProblemSession extends ChangeNotifier {
       if (_manual && _problem != null) {
         // Holds marked by hand: just wait for the start to plan from.
         final start = _startDetector.onPose(keypoints, now);
-        if (start != null) _lockManual(start);
+        if (start != null) _lockManual(start, byTap: false);
       } else if (_tracker.reference != null) {
         final start = _startDetector.onPose(keypoints, now);
         if (start != null) _runDetection(_tracker.reference!, start);
@@ -270,6 +280,7 @@ class ProblemSession extends ChangeNotifier {
     if (_disposed || _phase != ProblemPhase.confirming) return;
     if (problem == null || size == null || start == null) return;
     _phase = ProblemPhase.locked;
+    _lockedByTap = true;
     _beta = _plan(problem, size, start);
     notifyListeners();
   }
@@ -310,7 +321,7 @@ class ProblemSession extends ChangeNotifier {
 
     final start = _detectionStart;
     if (start != null) {
-      _lockManual(start);
+      _lockManual(start, byTap: true);
       return;
     }
     _startDetector.reset();
@@ -318,8 +329,9 @@ class ProblemSession extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Locks hand-marked holds once the climber's [start] is known.
-  void _lockManual(StartPosition start) {
+  /// Locks hand-marked holds once the climber's [start] is known. [byTap]
+  /// when the user just finished marking on the phone (see [lockedByTap]).
+  void _lockManual(StartPosition start, {required bool byTap}) {
     final problem = _problem;
     final size = _problemFrameSize;
     if (problem == null || size == null) return;
@@ -335,6 +347,7 @@ class ProblemSession extends ChangeNotifier {
     _detectionStart = start;
     _problem = locked;
     _phase = ProblemPhase.locked;
+    _lockedByTap = byTap;
     _beta = _plan(locked, size, start);
     notifyListeners();
   }
@@ -374,6 +387,7 @@ class ProblemSession extends ChangeNotifier {
     _detectionStart = null;
     _problemFrameSize = null;
     _manual = false;
+    _lockedByTap = false;
   }
 
   @override

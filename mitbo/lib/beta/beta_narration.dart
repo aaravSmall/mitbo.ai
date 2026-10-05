@@ -75,6 +75,10 @@ const sentCue = 'Nice send!';
 /// Live cue when the climber comes off the wall before sending.
 const offWallCue = 'Off the wall. Get back on the start holds to go again.';
 
+/// Live cue after the intro when the beta was planned from a tap on the
+/// phone: the climber still has to get on the wall.
+const getOnStartCue = "Get on the start holds when you're ready.";
+
 /// Live cue when the climber is back on the start holds, before the first
 /// step.
 const fromStartCue = 'From the start.';

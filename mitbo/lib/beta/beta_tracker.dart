@@ -51,6 +51,10 @@ enum ClimbState {
   /// Came off the wall (fell, stepped off, or topped out of frame);
   /// waiting for the climber to get back on the start holds.
   offWall,
+
+  /// Not on the wall yet (the beta was planned while the climber was at
+  /// the phone); waiting for them to get on the start holds.
+  waitingForStart,
 }
 
 /// Something that happened on the wall, reported by [BetaTracker.onPose].
@@ -92,10 +96,13 @@ class OffWall extends ClimbEvent {
   final bool afterSend;
 }
 
-/// The climber is back on the start holds after coming off; tracking
-/// restarts from the first step of the original beta.
+/// The climber is (back) on the start holds; tracking starts from the
+/// first step of the original beta. [first] when this is the first time
+/// ([ClimbState.waitingForStart]), not a restart after coming off.
 class BackOnStart extends ClimbEvent {
-  const BackOnStart();
+  const BackOnStart({this.first = false});
+
+  final bool first;
 }
 
 /// Thresholds for [BetaTracker]. Coordinates are normalized to the frame.
@@ -160,8 +167,10 @@ class BetaTracker {
     required this.problem,
     required BetaPlan plan,
     this.params = const TrackerParams(),
+    bool waitForStart = false,
   }) : originalPlan = plan {
     _load(plan);
+    if (waitForStart) _state = ClimbState.waitingForStart;
   }
 
   /// The problem whose holds the plan's hold indices refer to.
@@ -229,7 +238,8 @@ class BetaTracker {
       final off = _checkOffWall(left, right, now);
       if (off != null) return off;
     }
-    if (_state == ClimbState.offWall) {
+    if (_state == ClimbState.offWall ||
+        _state == ClimbState.waitingForStart) {
       return _checkBackOnStart(left, right, now);
     }
     if (_state != ClimbState.climbing) return null;
@@ -328,9 +338,10 @@ class BetaTracker {
     }
     final since = _onStartSince ??= now;
     if (now - since < params.backOnStartTime) return null;
+    final first = _state == ClimbState.waitingForStart;
     _state = ClimbState.climbing;
     _resetWatches();
-    return const BackOnStart();
+    return BackOnStart(first: first);
   }
 
   void _resetWatches() {

@@ -38,6 +38,8 @@ String problemStatusText(
       switch (climbState) {
         case ClimbState.sent:
           return '$color · sent!';
+        case ClimbState.waitingForStart:
+          return 'Get on the start holds to begin';
         case ClimbState.offWall:
           return 'Get back on the start holds to go again';
         case ClimbState.replanning:
