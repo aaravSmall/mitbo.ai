@@ -6,9 +6,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
 import 'package:mitbo/beta/beta_planner.dart';
+import 'package:mitbo/beta/beta_tracker.dart';
 import 'package:mitbo/models/climber_keypoints.dart';
 import 'package:mitbo/models/climber_profile.dart';
+import 'package:mitbo/services/beta_narrator.dart';
 import 'package:mitbo/services/pose_service.dart';
+import 'package:mitbo/state/climb_coach.dart';
 import 'package:mitbo/state/problem_session.dart';
 import 'package:mitbo/vision/hold_color.dart';
 import 'package:mitbo/vision/hold_segmenter.dart';
@@ -275,6 +278,37 @@ void main() {
       );
     });
 
+    test('shows live climb progress once locked', () {
+      final beta = planBeta(
+        _redProblem,
+        const StartPosition(
+          leftHand: Keypoint(0.5, 0.5, 0.9),
+          rightHand: Keypoint(0.5, 0.5, 0.9),
+        ),
+        profile: const ClimberProfile(heightCm: 170, wingspanCm: 170),
+        aspect: 0.75,
+      );
+      String text(ClimbState state, {int done = 0}) => problemStatusText(
+        ProblemPhase.locked,
+        problem: _redProblem,
+        beta: beta,
+        climbState: state,
+        movesDone: done,
+        totalMoves: 6,
+      );
+      expect(text(ClimbState.climbing), 'Red problem · 3 holds · 6 moves');
+      expect(
+        text(ClimbState.climbing, done: 2),
+        'Red problem · 3 holds · move 3 of 6',
+      );
+      expect(text(ClimbState.sent), 'Red problem · sent!');
+      expect(
+        text(ClimbState.offWall),
+        'Get back on the start holds to go again',
+      );
+      expect(text(ClimbState.replanning), 'Working out new beta…');
+    });
+
     testWidgets('pill offers reset only once locked or failed', (
       tester,
     ) async {
@@ -390,5 +424,63 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.byType(HoldOverlay), findsOneWidget);
     });
+
+    testWidgets('paints a coached climb without errors', (tester) async {
+      final h = _Harness();
+      await h.scanWall();
+      h.emit(_handsOnStart, fromMs: 1100, toMs: 2300);
+      h.detection!.complete(const ProblemFound(_redProblem));
+      await tester.pump();
+      final coach = ClimbCoach(
+        session: h.session,
+        frames: h.frames,
+        narrator: BetaNarrator(engine: _SilentEngine()),
+        clock: () => h.now,
+      );
+      addTearDown(coach.dispose);
+      expect(coach.plan, same(h.session.beta));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            width: 360,
+            height: 640,
+            child: HoldOverlay(session: h.session, coach: coach),
+          ),
+        ),
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    test('cruxHold finds the hold the crux move lands on', () {
+      expect(cruxHold(null), isNull);
+      const move = BetaMove(
+        limb: Limb.leftHand,
+        kind: MoveKind.bigReach,
+        from: WallPoint(0, 0),
+        to: WallPoint(0, 100),
+        toHold: 1,
+      );
+      const plan = BetaPlan(
+        holds: [WallPoint(0, 100), WallPoint(0, 100), WallPoint(0, 0)],
+        leftStart: 2,
+        rightStart: 2,
+        topHold: 0,
+        moves: [move],
+        cmPerUnit: 350,
+        scaleFromBody: false,
+        difficulties: [1.5],
+        cruxMove: 0,
+      );
+      expect(cruxHold(plan), 1);
+    });
   });
+}
+
+class _SilentEngine implements SpeechEngine {
+  @override
+  Future<void> speak(String text) async {}
+
+  @override
+  Future<void> stop() async {}
 }
