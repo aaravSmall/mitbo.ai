@@ -229,16 +229,12 @@ class BetaTracker {
       final off = _checkOffWall(left, right, now);
       if (off != null) return off;
     }
-    switch (_state) {
-      case ClimbState.offWall:
-        return _checkBackOnStart(left, right, now);
-      case ClimbState.climbing:
-        return _watch(Limb.leftHand, _leftWatch, left, now) ??
-            _watch(Limb.rightHand, _rightWatch, right, now);
-      case ClimbState.sent:
-      case ClimbState.replanning:
-        return null;
+    if (_state == ClimbState.offWall) {
+      return _checkBackOnStart(left, right, now);
     }
+    if (_state != ClimbState.climbing) return null;
+    return _watch(Limb.leftHand, _leftWatch, left, now) ??
+        _watch(Limb.rightHand, _rightWatch, right, now);
   }
 
   /// Resumes after an [OffBeta] with [newPlan], planned from the off-beta
